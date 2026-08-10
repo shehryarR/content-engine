@@ -61,6 +61,7 @@ def try_register_real_providers() -> list[str]:
             from providers.gemini_script import GeminiScriptProvider
             register(GeminiScriptProvider())
             real.append('script_generation')
+            print("script_generation stub overwritten")
     except Exception as e:
         print(f'[registry] script_generation real provider unavailable: {e}')
     try:

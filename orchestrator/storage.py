@@ -57,7 +57,7 @@ def _ensure_bucket_exists(client) -> None:
 
 def put_artifact(data: bytes, artifact_id: str, mime_type: str) -> ArtifactRefV1:
     digest = hashlib.sha256(data).hexdigest()
-    key = f"artifacts/{digest}"
+    key = f"artifacts/{artifact_id}_{digest}"
 
     client = _make_s3_client()
     try:

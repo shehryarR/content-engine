@@ -33,11 +33,13 @@ class GeminiScriptProvider:
             None,
         )
 
-        topic = "AI technology"
 
         if idea_json:
             idea_data = json.loads(get_artifact(idea_json))
-            topic = idea_data.get("topic", topic)
+            topic = idea_data.get("topic")
+
+        if not topic:
+            raise ValueError("Idea artifact is missing a topic")
 
         response = self._client.models.generate_content(
             model=self._model_name,
