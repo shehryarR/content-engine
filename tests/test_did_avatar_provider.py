@@ -98,3 +98,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def test_did_avatar_provider_capability():
+    assert DIDAvatarProvider.capability == "avatar_render"
+    main()   
