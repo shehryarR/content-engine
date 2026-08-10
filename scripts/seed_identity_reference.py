@@ -11,13 +11,13 @@ from orchestrator.storage import put_artifact
 from orchestrator.manifest_store import get_connection
 
 
-def resolve_url(url:str)->str:
+def resolve_url(url: str) -> str:
     file_id = url
     if "drive.google.com" in url:
-        
         match = re.search(r"/d/([a-zA-Z0-9_-]+)", url) or re.search(r"id=([a-zA-Z0-9_-]+)", url)
         file_id = match.group(1)
     return f"https://drive.google.com/uc?export=download&id={file_id}"
+
 
 def validate_image(data: bytes):
     if len(data) > 10 * 1024 * 1024:
@@ -49,8 +49,11 @@ def main():
             cur.execute(
                 """
                 INSERT INTO identity_profiles
-                    (identity_id, display_name,refrence_sample_id , consent_grant_id, consent_status)
+                    (identity_id, display_name, reference_asset, consent_grant_id, consent_status)
                 VALUES (%s, %s, %s, %s, 'active')
+                ON CONFLICT (identity_id) DO UPDATE SET
+                    reference_asset = EXCLUDED.reference_asset,
+                    consent_status = 'active'
                 """,
                 (identity_id, display_name, artifact.path, consent_grant_id),
             )
