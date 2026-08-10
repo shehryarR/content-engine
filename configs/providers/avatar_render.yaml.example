@@ -1,0 +1,4 @@
+api key:"YOUR API KEY HERE "
+base_url: "https://api.d-id.com"
+poll_interval_seconds: 5
+poll_timeout_seconds: 300
