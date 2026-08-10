@@ -40,6 +40,25 @@ def _measure_duration(video_bytes: bytes) -> float:
         os.unlink(tmp_path)
 
 
+def _has_audio_stream(video_bytes: bytes) -> bool:
+    """Return True if the video bytes already contain an audio stream."""
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(video_bytes)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", tmp_path],
+            capture_output=True, text=True, timeout=10
+        )
+        data = json.loads(result.stdout)
+        return any(s.get("codec_type") == "audio" for s in data.get("streams", []))
+    except Exception:
+        return False
+    finally:
+        os.unlink(tmp_path)
+
+
 def _mux(audio_bytes: bytes, video_bytes: bytes) -> bytes:
     """Mux audio + video into one mp4 via ffmpeg. Returns muxed bytes."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -87,11 +106,18 @@ class StubAssemblyProvider:
 
         stub = False
         try:
-            if audio_ref is None or video_ref is None:
-                raise ValueError("Missing S20 audio or S40 video artifact — falling back to fixture")
-            audio_bytes = get_artifact(audio_ref)
+            if video_ref is None:
+                raise ValueError("Missing S40 video artifact — falling back to fixture")
             video_bytes = get_artifact(video_ref)
-            video_bytes = _mux(audio_bytes, video_bytes)
+            # D-ID already muxes audio into the video — skip mux if audio stream present.
+            # Only mux if the video has no audio track (e.g. stub/local render path).
+            if _has_audio_stream(video_bytes):
+                pass  # D-ID path: audio already embedded, no mux needed
+            else:
+                if audio_ref is None:
+                    raise ValueError("Video has no audio and no S20 audio artifact found")
+                audio_bytes = get_artifact(audio_ref)
+                video_bytes = _mux(audio_bytes, video_bytes)
         except Exception as e:
             print(f"[assembly] falling back to fixture: {e}")
             video_bytes = FIXTURE_VIDEO.read_bytes()

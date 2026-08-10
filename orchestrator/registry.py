@@ -9,7 +9,7 @@ from providers.stub_assembly import StubAssemblyProvider
 from providers.stub_qc import StubQCProvider
 from providers.stub_disclosure import StubDisclosureProvider
 from providers.stub_publish import StubPublishProvider
-from providers.whisperx_captions import WhisperXCaptionsProvider
+from providers.openai_whisper_captions import OpenAIWhisperCaptionsProvider
 from orchestrator.provider_config import load_provider_config
 
 _providers: dict[str,StageProvider] ={}
@@ -67,7 +67,7 @@ def try_register_real_providers() -> list[str]:
         cfg = load_provider_config('caption_generation')
         if cfg.get('api_key') or cfg.get('model_size'):
 
-            register(WhisperXCaptionsProvider())
+            register(OpenAIWhisperCaptionsProvider())
             real.append('caption_generation')
     except Exception as e:
         print(f'[registry] caption_generation real provider unavailable: {e}')

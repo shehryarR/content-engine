@@ -1,3 +1,2 @@
 # configs/providers/caption_generation.yaml.example
-device: cpu  # or cuda if GPU available
-model_size: base  # base.en is English-only and faster
+api_key: YOUR_OPENAI_API_KEY_HERE
