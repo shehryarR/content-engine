@@ -16,7 +16,6 @@ class GeminiScriptProvider:
     capability: str = "script_generation"
 
     def __init__(self):
-        print("***** GEMINI PROVIDER REGISTERED *****")
         config = load_provider_config("script_generation")
 
         self._model_name = config.get("model_id", "gemini-1.5-flash")
@@ -25,7 +24,6 @@ class GeminiScriptProvider:
 
     def run(self, envelope: StageEnvelopeV1, run_id: str) -> StageOutputV1:
 
-        print("***** GEMINI SCRIPT RUNNING *****")
         idea_json = next(
             (
                 ref
@@ -35,11 +33,13 @@ class GeminiScriptProvider:
             None,
         )
 
-        topic = "AI technology"
 
         if idea_json:
             idea_data = json.loads(get_artifact(idea_json))
-            topic = idea_data.get("topic", topic)
+            topic = idea_data.get("topic")
+
+        if not topic:
+            raise ValueError("Idea artifact is missing a topic")
 
         response = self._client.models.generate_content(
             model=self._model_name,

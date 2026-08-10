@@ -288,7 +288,7 @@ def main():
     asyncio.run(_approve(client,workflow_id, run_id))
 
 
-    workflow_result = asyncio.run(_wait_for_completion(workflow_id))
+    workflow_result = asyncio.run(_wait_for_completion(client,workflow_id))
 
     
     _verify(run_id, args.privacy, workflow_result)

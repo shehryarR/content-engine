@@ -10,6 +10,8 @@ from providers.stub_qc import StubQCProvider
 from providers.stub_disclosure import StubDisclosureProvider
 from providers.stub_publish import StubPublishProvider
 from providers.openai_whisper_captions import OpenAIWhisperCaptionsProvider
+from providers.gemini_script import GeminiScriptProvider
+from providers.elevenlabs_voice import ElevenLabsVoiceProvider
 from orchestrator.provider_config import load_provider_config
 
 _providers: dict[str,StageProvider] ={}
@@ -58,19 +60,28 @@ def try_register_real_providers() -> list[str]:
         
         cfg = load_provider_config('script_generation')
         if cfg.get('api_key'):
-            from providers.gemini_script import GeminiScriptProvider
+            
             register(GeminiScriptProvider())
             real.append('script_generation')
+            print("script_generation stub overwritten")
     except Exception as e:
         print(f'[registry] script_generation real provider unavailable: {e}')
+    try:
+        cfg = load_provider_config('voice_synthesis')
+        if cfg.get('api_key'):
+            
+            register(ElevenLabsVoiceProvider())
+            real.append('voice_synthesis')
+            print("voice_synthesis stub overwritten")
+    except Exception as e:
+        print(f'[registry] voice_synthesis real provider unavailable: {e}')
     try:
         cfg = load_provider_config('caption_generation')
         if cfg.get('api_key') or cfg.get('model_size'):
 
             register(OpenAIWhisperCaptionsProvider())
             real.append('caption_generation')
+            print("captions stub overwritten")
     except Exception as e:
         print(f'[registry] caption_generation real provider unavailable: {e}')
     return real
-
-register_all_stubs()
