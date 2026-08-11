@@ -14,6 +14,8 @@ from contracts.stages.s30_avatar import PrimaryVisualTrackV1
 from orchestrator.provider_config import load_provider_config
 from orchestrator.storage import get_artifact, put_artifact
 from providers.base import StageProvider
+import base64
+
 
 
 class DIDAvatarProvider(StageProvider):
@@ -54,7 +56,7 @@ class DIDAvatarProvider(StageProvider):
         )
 
         self._headers = {
-            "Authorization": f"Basic {self._api_key}",
+            "Authorization": f"Basic {base64.b64encode(self._api_key.encode()).decode()}",
         }
 
     def _upload_image(self, image_data: bytes, mime_type: str) -> str:
