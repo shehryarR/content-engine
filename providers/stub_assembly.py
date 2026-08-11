@@ -2,10 +2,10 @@
 providers/stub_assembly.py
 S60 Assembly Provider.
 Fetches real S20 audio and S40 video artifacts from the envelope,
-muxes them via ffmpeg into a single output file, measures duration
-via ffprobe, and stores the result as the master video artifact.
-Falls back to the black_5s.mp4 fixture if real artifacts are missing
-or ffmpeg is unavailable.
+muxes them via ffmpeg into a single output file, burns in S50 captions,
+measures duration via ffprobe, and stores the result as the master
+video artifact. Falls back to the black_5s.mp4 fixture if real
+artifacts are missing or ffmpeg is unavailable.
 """
 import json
 import os
@@ -90,19 +90,82 @@ def _mux(audio_bytes: bytes, video_bytes: bytes) -> bytes:
             return f.read()
 
 
+def _words_to_srt(words: list[dict]) -> str:
+    """Group word-level timestamps into short SRT caption lines (~6 words each)."""
+    def fmt_ts(seconds: float) -> str:
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    lines = []
+    chunk_size = 6
+    idx = 1
+    for i in range(0, len(words), chunk_size):
+        chunk = words[i:i + chunk_size]
+        if not chunk:
+            continue
+        start = chunk[0]["start"]
+        end = chunk[-1]["end"]
+        text = " ".join(w["text"] for w in chunk)
+        lines.append(f"{idx}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n")
+        idx += 1
+    return "\n".join(lines)
+
+
+def _burn_captions(video_bytes: bytes, words: list[dict]) -> bytes:
+    """Burn word-level captions into the video via ffmpeg's subtitles filter.
+    Re-encodes the video stream (required by the subtitles filter — can't
+    be combined with -c:v copy), audio stream is passed through untouched."""
+    if not words:
+        return video_bytes  # nothing to burn, return unchanged
+
+    srt_content = _words_to_srt(words)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        video_path = os.path.join(tmp, "input.mp4")
+        srt_path = os.path.join(tmp, "captions.srt")
+        out_path = os.path.join(tmp, "burned.mp4")
+
+        with open(video_path, "wb") as f:
+            f.write(video_bytes)
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_content)
+
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-vf", f"subtitles={srt_path}",
+                "-c:a", "copy",
+                out_path,
+            ],
+            capture_output=True, timeout=60
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg caption burn-in failed: {result.stderr.decode()}")
+
+        with open(out_path, "rb") as f:
+            return f.read()
+
+
 class StubAssemblyProvider:
     """S60 assembly — real ffmpeg mux when S20/S40 artifacts present, fixture fallback otherwise."""
     capability: str = "assembly"
 
     def run(self, envelope: StageEnvelopeV1, run_id: str) -> StageOutputV1:
-        # Find audio (S20) and video (S40) artifacts
+        # Find audio (S20), video (S40), and captions (S50) artifacts
         audio_ref = None
         video_ref = None
+        caption_ref = None
         for ref in envelope.artifact_refs:
             if ref.mime_type and ref.mime_type.startswith("audio/") and audio_ref is None:
                 audio_ref = ref
             if ref.mime_type and ref.mime_type.startswith("video/") and video_ref is None:
                 video_ref = ref
+            if ref.mime_type == "application/json" and "captions" in ref.artifact_id and caption_ref is None:
+                caption_ref = ref
 
         stub = False
         try:
@@ -122,6 +185,14 @@ class StubAssemblyProvider:
             print(f"[assembly] falling back to fixture: {e}")
             video_bytes = FIXTURE_VIDEO.read_bytes()
             stub = True
+
+        # Burn in S50 captions, applies to both the muxed and skip-mux paths
+        if caption_ref is not None:
+            try:
+                captions_data = json.loads(get_artifact(caption_ref))
+                video_bytes = _burn_captions(video_bytes, captions_data.get("words", []))
+            except Exception as e:
+                print(f"[assembly] caption burn-in skipped: {e}")
 
         artifact = put_artifact(
             data=video_bytes,
