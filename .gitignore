@@ -5,7 +5,9 @@ __pycache__/
 *.DS_Store
 client_secrets.json
 credentials.json
-configs/providers/*.yamlconfigs/providers/caption_generation.yaml
+configs/providers/*.yaml
+configs/providers/caption_generation.yaml
 configs/providers/script_generation.yaml
 configs/providers/voice_synthesis.yaml
 configs/providers/avatar_render.yaml
+
