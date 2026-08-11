@@ -1,6 +1,5 @@
-modality: avatar
+modality: faceless
 topic: M1 walking skeleton
-identity_id: identity_001
 voice_id: voice_001
 style_id: style_001
 temporal_host: localhost:7233

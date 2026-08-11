@@ -18,10 +18,9 @@ TEMPORAL_HOST = "localhost:7233"
 
 async def main() -> None:
     idea = IdeaRequestV1(
-        idea_request_id="run_m1_ammar_test2",
-        modality=Modality.AVATAR,
+        idea_request_id="fatima4",
+        modality=Modality.FACELESS,
         topic="M1 walking skeleton test",
-        identity_id="identity_001",
         voice_id="voice_001",
     )
     idea_json = idea.model_dump_json()
