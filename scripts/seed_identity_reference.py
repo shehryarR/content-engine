@@ -49,13 +49,14 @@ def main():
             cur.execute(
                 """
                 INSERT INTO identity_profiles
-                    (identity_id, display_name, reference_asset, consent_grant_id, consent_status)
-                VALUES (%s, %s, %s, %s, 'active')
+                    (identity_id, display_name, reference_asset, reference_sample_hash, consent_grant_id, consent_status)
+                VALUES (%s, %s, %s, %s, %s, 'active')
                 ON CONFLICT (identity_id) DO UPDATE SET
                     reference_asset = EXCLUDED.reference_asset,
+                    reference_sample_hash = EXCLUDED.reference_sample_hash,
                     consent_status = 'active'
                 """,
-                (identity_id, display_name, artifact.path, consent_grant_id),
+                (identity_id, display_name, artifact.path, artifact.hash, consent_grant_id),
             )
             conn.commit()
 

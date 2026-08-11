@@ -11,6 +11,7 @@ from providers.stub_disclosure import StubDisclosureProvider
 from providers.stub_publish import StubPublishProvider
 from providers.openai_whisper_captions import OpenAIWhisperCaptionsProvider
 from providers.gemini_script import GeminiScriptProvider
+from providers.did_avatar import DIDAvatarProvider
 from providers.elevenlabs_voice import ElevenLabsVoiceProvider
 from orchestrator.provider_config import load_provider_config
 
@@ -36,9 +37,6 @@ def clear() -> None:
 
 def register_all_stubs() -> None:
     
-    
-    
-
     register(StubIntakeProvider())
     register(StubScriptProvider())
     register(StubVoiceProvider())
@@ -74,7 +72,16 @@ def try_register_real_providers() -> list[str]:
             real.append('voice_synthesis')
             print("voice_synthesis stub overwritten")
     except Exception as e:
+    
         print(f'[registry] voice_synthesis real provider unavailable: {e}')
+    try :
+        cfg = load_provider_config('avatar_render')
+        if cfg.get('api_key'):
+            register(DIDAvatarProvider())
+            real.append('avatar_render')
+            print("S30 AND S40 overwritten")
+    except Exception as e:
+        print(f'[registry] avatar_render real provider unavailable : {e}')
     try:
         cfg = load_provider_config('caption_generation')
         if cfg.get('api_key') or cfg.get('model_size'):

@@ -15,7 +15,7 @@ with workflow.unsafe.imports_passed_through():
     from contracts.common.envelope import (
         ProviderDescriptorV1,
         StageEnvelopeV1,
-        ArtifactRefV1, 
+        ArtifactRefV1,
     )
     from contracts.stages.g80_approval import HumanApprovalV1
     from graph.pipeline_graph import STAGE_SEQUENCE
@@ -109,6 +109,23 @@ class AvatarPipeline:
         )
         last_validation_ref = output_dict.pop("_validation_ref", None)
         self._stage_outputs["S00"] = output_dict
+
+        # Identity reference isn't a pipeline stage output — it's a registry-seeded
+        # artifact — so it has to be fetched explicitly here rather than arriving
+        # through the normal prior-stage accumulation. Case-insensitive compare
+        # since modality strings have appeared as both "avatar" and "AVATAR"
+        # across config files vs the enum.
+        identity_ref_dict = None
+        modality_value = str(idea.get("modality", "")).upper()
+        if modality_value == "AVATAR" and idea.get("identity_id"):
+            identity_ref_dict = await workflow.execute_activity(
+                "fetch_identity_reference",
+                args=[idea["identity_id"]],
+                start_to_close_timeout=STAGE_TIMEOUT,
+            )
+        if identity_ref_dict is not None:
+            self._stage_outputs["_identity_ref"] = {"artifact_refs": [identity_ref_dict]}
+
         # STAGE_SEQUENCE[1:] then runs through the existing loop, unchanged
         for stage_id, capability in STAGE_SEQUENCE[1:8]:
             prior_artifact_refs: list[dict] = []
@@ -124,12 +141,12 @@ class AvatarPipeline:
             )
             output_dict = await workflow.execute_activity(
                 "run_stage",
-                args=[capability,envelope_dict, run_id,run_id,],
+                args=[capability, envelope_dict, run_id, run_id],
                 start_to_close_timeout=STAGE_TIMEOUT,
             )
             last_validation_ref = output_dict.pop("_validation_ref", None)
             self._stage_outputs[stage_id] = output_dict
-            
+
             # Record current master video hash from S60 assembly output if available
             if stage_id == "S60":
                 refs = output_dict.get("artifact_refs", [])
@@ -145,7 +162,7 @@ class AvatarPipeline:
         workflow.logger.info("Waiting for approval signal (G80)...")
         g80_started_at = workflow.now()
         try:
-            await workflow.wait_condition(lambda: self._approval is not None,timeout=timedelta(minutes=30))
+            await workflow.wait_condition(lambda: self._approval is not None, timeout=timedelta(minutes=30))
         except asyncio.TimeoutError:
             workflow.logger.error("G80 approval timed out after 30 minutes - no valid signal received")
             raise
@@ -173,7 +190,7 @@ class AvatarPipeline:
             )
             output_dict = await workflow.execute_activity(
                 "run_stage",
-                args=[capability,envelope_dict, run_id,run_id,],
+                args=[capability, envelope_dict, run_id, run_id],
                 start_to_close_timeout=STAGE_TIMEOUT,
             )
             last_validation_ref = output_dict.pop("_validation_ref", None)
@@ -181,6 +198,6 @@ class AvatarPipeline:
             workflow.logger.info(f"Stage {stage_id} completed")
 
         return {
-    "G90": self._stage_outputs.get("G90", {}),
-    "S100": self._stage_outputs.get("S100", {}),
-            }
+            "G90": self._stage_outputs.get("G90", {}),
+            "S100": self._stage_outputs.get("S100", {}),
+        }

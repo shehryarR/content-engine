@@ -158,14 +158,20 @@ class StubAssemblyProvider:
         # Find audio (S20), video (S40), and captions (S50) artifacts
         audio_ref = None
         video_ref = None
+        sync_video_ref = None
         caption_ref = None
         for ref in envelope.artifact_refs:
             if ref.mime_type and ref.mime_type.startswith("audio/") and audio_ref is None:
                 audio_ref = ref
-            if ref.mime_type and ref.mime_type.startswith("video/") and video_ref is None:
-                video_ref = ref
+            if ref.mime_type and ref.mime_type.startswith("video/"):
+                if ref.artifact_id.startswith("sync_") and sync_video_ref is None:
+                    sync_video_ref = ref
+                elif video_ref is None:
+                    video_ref = ref
             if ref.mime_type == "application/json" and "captions" in ref.artifact_id and caption_ref is None:
                 caption_ref = ref
+
+        video_ref = sync_video_ref or video_ref  # prefer S40's output; fall back if S40 somehow missing
 
         stub = False
         try:
