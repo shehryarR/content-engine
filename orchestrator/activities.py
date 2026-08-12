@@ -2,8 +2,10 @@ from temporalio import activity
 
 from contracts.common.envelope import StageEnvelopeV1
 from contracts.common.manifest import StageRecordV1, StageStatus
+from contracts.common.envelope import ArtifactRefV1
 from orchestrator.manifest_store import save_stage_record
 from orchestrator.stage_executor import execute_stage
+from orchestrator.consent_gate import _fetch_one
 
 
 @activity.defn
@@ -50,3 +52,28 @@ async def run_intake_stage(idea_dict: dict, run_id: str, envelope_dict: dict) ->
     result = output.model_dump()
     result["_validation_ref"] = validation_ref.model_dump()
     return result
+
+@activity.defn
+async def fetch_identity_reference(identity_id: str) -> dict:
+    row = _fetch_one(
+        "SELECT reference_asset, reference_sample_hash, consent_status "
+        "FROM identity_profiles WHERE identity_id=%s",
+        (identity_id,),
+    )
+    if row is None:
+        raise ValueError(f"identity_id {identity_id} not found in registry")
+    reference_path, reference_hash, consent_status = row
+    if consent_status != "active":
+        raise ValueError(f"identity_id {identity_id} consent status is {consent_status}, not active")
+    if not reference_hash:
+        raise ValueError(
+            f"identity_id {identity_id} has no reference_sample_hash — "
+            f"reseed via seed_identity_reference.py"
+        )
+
+    return ArtifactRefV1(
+        artifact_id=f"identity_ref_{identity_id}",
+        path=reference_path,
+        hash=reference_hash,
+        mime_type="image/png",
+    ).model_dump()

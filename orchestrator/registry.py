@@ -1,17 +1,19 @@
 from providers.base import StageProvider
-from providers.stub_intake import StubIntakeProvider
-from providers.stub_script import StubScriptProvider
-from providers.stub_voice import StubVoiceProvider
-from providers.stub_avatar import StubAvatarProvider
-from providers.stub_sync import StubSyncProvider
-from providers.stub_captions import StubCaptionsProvider
-from providers.stub_assembly import StubAssemblyProvider
-from providers.stub_qc import StubQCProvider
-from providers.stub_disclosure import StubDisclosureProvider
-from providers.stub_publish import StubPublishProvider
-from providers.openai_whisper_captions import OpenAIWhisperCaptionsProvider
-from providers.gemini_script import GeminiScriptProvider
-from providers.elevenlabs_voice import ElevenLabsVoiceProvider
+from providers.stub.stub_intake import StubIntakeProvider
+from providers.stub.stub_script import StubScriptProvider
+from providers.stub.stub_voice import StubVoiceProvider
+from providers.stub.stub_avatar import StubAvatarProvider
+from providers.stub.stub_sync import StubSyncProvider
+from providers.stub.stub_captions import StubCaptionsProvider
+from providers.stub.stub_assembly import StubAssemblyProvider
+from providers.stub.stub_qc import StubQCProvider
+from providers.stub.stub_disclosure import StubDisclosureProvider
+from providers.stub.stub_publish import StubPublishProvider
+from providers.real.openai_whisper_captions import OpenAIWhisperCaptionsProvider
+from providers.real.gemini_script import GeminiScriptProvider
+from providers.real.openai_script  import OpenAIScriptProvider
+from providers.real.did_avatar import DIDAvatarProvider
+from providers.real.elevenlabs_voice import ElevenLabsVoiceProvider
 from orchestrator.provider_config import load_provider_config
 
 _providers: dict[str,StageProvider] ={}
@@ -36,9 +38,6 @@ def clear() -> None:
 
 def register_all_stubs() -> None:
     
-    
-    
-
     register(StubIntakeProvider())
     register(StubScriptProvider())
     register(StubVoiceProvider())
@@ -61,7 +60,8 @@ def try_register_real_providers() -> list[str]:
         cfg = load_provider_config('script_generation')
         if cfg.get('api_key'):
             
-            register(GeminiScriptProvider())
+            
+            register(OpenAIScriptProvider())
             real.append('script_generation')
             print("script_generation stub overwritten")
     except Exception as e:
@@ -74,7 +74,16 @@ def try_register_real_providers() -> list[str]:
             real.append('voice_synthesis')
             print("voice_synthesis stub overwritten")
     except Exception as e:
+    
         print(f'[registry] voice_synthesis real provider unavailable: {e}')
+    try :
+        cfg = load_provider_config('avatar_render')
+        if cfg.get('api_key'):
+            register(DIDAvatarProvider())
+            real.append('avatar_render')
+            print("S30 AND S40 overwritten")
+    except Exception as e:
+        print(f'[registry] avatar_render real provider unavailable : {e}')
     try:
         cfg = load_provider_config('caption_generation')
         if cfg.get('api_key') or cfg.get('model_size'):

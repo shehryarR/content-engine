@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import asyncio
 import sys
@@ -15,7 +18,7 @@ from contracts.stages.idea_request import IdeaRequestV1, Modality
 from orchestrator.manifest_store import load_manifest
 from orchestrator.pipeline import TASK_QUEUE, AvatarPipeline
 from orchestrator.registry import register_all_stubs, try_register_real_providers
-from orchestrator.activities import run_stage, record_g80_approval, run_intake_stage
+from orchestrator.activities import run_stage, record_g80_approval, run_intake_stage,fetch_identity_reference
 from orchestrator.consent_gate import validate_run
 from orchestrator.manifest_store import get_connection
 from contracts.stages.g80_approval import ApprovalDecision, HumanApprovalV1
@@ -39,7 +42,7 @@ def _run_worker():
             client,
             task_queue=TASK_QUEUE,
             workflows=[AvatarPipeline],
-            activities=[run_stage, record_g80_approval, run_intake_stage],
+            activities=[run_stage, record_g80_approval, run_intake_stage,fetch_identity_reference],
         )
         print("[worker] Started on task queue: avatar-harness")
         await worker.run()
@@ -62,7 +65,7 @@ async def _start_pipeline(idea: IdeaRequestV1) -> tuple[Client,str]:
 
 # ── Wait for G80 ──────────────────────────────────────────────────────────────
 
-async def _wait_for_g80(run_id: str, timeout: int = 120) -> str:
+async def _wait_for_g80(run_id: str, timeout: int = 680) -> str:
     """Poll manifest until S00-S70 all passed, meaning pipeline is at G80."""
    
 

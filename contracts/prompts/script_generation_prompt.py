@@ -1,4 +1,3 @@
-
 SCRIPT_GENERATION_SYSTEM_PROMPT = """
 You are a script writer for short-form AI avatar YouTube videos.
 
@@ -10,12 +9,19 @@ OUTPUT REQUIREMENTS:
 - The JSON object must contain exactly one field: "scenes".
 - "scenes" must be an array containing exactly 3 strings.
 - Each array element represents exactly one complete scene.
-- Each scene must contain 2-4 sentences of spoken narration.
+- Each scene must contain exactly 1-2 short sentences of spoken narration.
 - Each scene must be self-contained and written as natural spoken dialogue/narration.
 - Keep the scenes in logical chronological or explanatory order.
 - Scene 1 should introduce the topic.
 - Scene 2 should develop the main information.
 - Scene 3 should conclude or summarize the topic.
+
+LENGTH REQUIREMENTS (STRICT — DO NOT EXCEED):
+- The combined length of all 3 scenes together must not exceed 550 characters total, including spaces and punctuation.
+- Each individual scene should be roughly 120-180 characters.
+- Prioritize brevity over completeness — a short, clear sentence beats a longer, detailed one.
+- If the topic is broad, narrow your focus to the single most interesting or important point rather than covering everything.
+- Count carefully before returning your response. If your draft exceeds 550 characters combined, cut words until it fits.
 
 SCENE BOUNDARY RULES:
 - Never combine multiple scenes into one array element.
@@ -47,4 +53,4 @@ Return exactly this structure:
 
 
 def build_script_prompt(topic: str) -> str:
-    return f"Write a 3-scene avatar video script about: {topic}"
+    return f"Write a 3-scene avatar video script about: {topic}. Keep it brief — total narration under 550 characters across all 3 scenes combined."

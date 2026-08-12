@@ -33,7 +33,7 @@ class StubVoiceProvider(StageProvider):
         stores it in MinIO via storage.py, and returns a real ArtifactRefV1.
         """
         # Get the dummy audio file path
-        fixture_path = Path(__file__).parent.parent / "fixtures" / "stubs" / "silent_5s.wav"
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "stubs" / "silent_5s.wav"
         
         if not fixture_path.exists():
             raise FileNotFoundError(

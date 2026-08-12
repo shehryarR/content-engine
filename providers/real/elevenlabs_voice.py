@@ -8,7 +8,7 @@ from orchestrator.provider_config import load_provider_config
 from orchestrator.storage import get_artifact, put_artifact
 from orchestrator.telemetry import get_connection
 
-MAX_CHARS_MULTILINGUAL_V2 = 9500  # 10k hard cap, leave headroom
+MAX_CHARS_MULTILINGUAL_V2 = 1500  # 10k hard cap, leave headroom
 
 
 def _fetch_one(query: str, params: tuple) -> tuple | None:
@@ -75,6 +75,15 @@ class ElevenLabsVoiceProvider:
             output_format="mp3_44100_128",
         )
         audio_bytes = b"".join(audio_generator)
+        estimated_duration_sec = len(audio_bytes) / (128_000 / 8)  # from our known 128kbps MP3 bitrate
+        MAX_AUDIO_DURATION_SEC = 50  # ~50s * 176.4KB/s ≈ 8.8MB WAV, safe margin under D-ID's 10MB cap
+
+        if estimated_duration_sec > MAX_AUDIO_DURATION_SEC:
+            raise ValueError(
+        f"Generated narration is ~{estimated_duration_sec:.0f}s, exceeds the "
+        f"{MAX_AUDIO_DURATION_SEC}s cap needed to stay under D-ID's 10MB post-conversion "
+        f"WAV limit. Narration was {len(narration)} chars — shorten the script."
+    )
 
         artifact = put_artifact(
             data=audio_bytes,
