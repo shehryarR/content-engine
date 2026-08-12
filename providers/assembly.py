@@ -150,7 +150,7 @@ def _burn_captions(video_bytes: bytes, words: list[dict]) -> bytes:
             return f.read()
 
 
-class StubAssemblyProvider:
+class AssemblyProvider:
     """S60 assembly — real ffmpeg mux when S20/S40 artifacts present, fixture fallback otherwise."""
     capability: str = "assembly"
 
@@ -220,7 +220,7 @@ class StubAssemblyProvider:
             payload=master_video.model_dump(mode="json"),
             metadata={
                 "stub": stub,
-                "provider": "stub_assembly_provider",
+                "provider": "assembly_provider",
                 "scene_count": master_video.scene_count,
                 "duration_seconds": master_video.duration_seconds,
             },

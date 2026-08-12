@@ -21,7 +21,7 @@ from orchestrator.storage import get_artifact
 
 from providers.stub.stub_intake import StubIntakeProvider
 from providers.stub.stub_captions import StubCaptionsProvider
-from providers.stub.stub_assembly import StubAssemblyProvider
+from providers.assembly import AssemblyProvider
 from contracts.stages.idea_request import IdeaRequestV1, Modality
 
 
@@ -93,7 +93,7 @@ def test_stub_captions():
 
 
 def test_stub_assembly():
-    provider = StubAssemblyProvider()
+    provider = AssemblyProvider()
 
     output = provider.run(
         make_envelope("S60", provider.capability), "test_run_001"

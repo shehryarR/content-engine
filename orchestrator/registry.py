@@ -5,7 +5,7 @@ from providers.stub.stub_voice import StubVoiceProvider
 from providers.stub.stub_avatar import StubAvatarProvider
 from providers.stub.stub_sync import StubSyncProvider
 from providers.stub.stub_captions import StubCaptionsProvider
-from providers.stub.stub_assembly import StubAssemblyProvider
+from providers.assembly import AssemblyProvider
 from providers.stub.stub_qc import StubQCProvider
 from providers.stub.stub_disclosure import StubDisclosureProvider
 from providers.stub.stub_publish import StubPublishProvider
@@ -44,7 +44,7 @@ def register_all_stubs() -> None:
     register(StubAvatarProvider())
     register(StubSyncProvider())
     register(StubCaptionsProvider())
-    register(StubAssemblyProvider())
+    register(AssemblyProvider())
     register(StubQCProvider())
     register(StubDisclosureProvider())
     register(StubPublishProvider())
