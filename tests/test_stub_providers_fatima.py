@@ -19,9 +19,9 @@ from contracts.common.envelope import (
 )
 from orchestrator.storage import get_artifact
 
-from providers.stub_intake import StubIntakeProvider
-from providers.stub_captions import StubCaptionsProvider
-from providers.stub_assembly import StubAssemblyProvider
+from providers.stub.stub_intake import StubIntakeProvider
+from providers.stub.stub_captions import StubCaptionsProvider
+from providers.stub.stub_assembly import StubAssemblyProvider
 from contracts.stages.idea_request import IdeaRequestV1, Modality
 
 

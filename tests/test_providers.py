@@ -25,12 +25,12 @@ from contracts.stages.s40_sync import SynchronizedMediaV1
 from contracts.stages.s70_qc import QualityReportV1
 from orchestrator.registry import clear, get, register
 from providers.base import StageProvider
-from providers.stub_avatar import StubAvatarProvider
-from providers.stub_disclosure import StubDisclosureProvider
-from providers.stub_qc import StubQCProvider
-from providers.stub_script import StubScriptProvider
-from providers.stub_sync import StubSyncProvider
-from providers.stub_voice import StubVoiceProvider
+from providers.stub.stub_avatar import StubAvatarProvider
+from providers.stub.stub_disclosure import StubDisclosureProvider
+from providers.stub.stub_qc import StubQCProvider
+from providers.stub.stub_script import StubScriptProvider
+from providers.stub.stub_sync import StubSyncProvider
+from providers.stub.stub_voice import StubVoiceProvider
 
 @pytest.fixture(autouse=True)
 def clear_registry():

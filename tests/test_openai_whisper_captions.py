@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from contracts.common.envelope import (
     ArtifactRefV1, StageEnvelopeV1, ProviderDescriptorV1
 )
-from providers.openai_whisper_captions import OpenAIWhisperCaptionsProvider
+from providers.real.openai_whisper_captions import OpenAIWhisperCaptionsProvider
 
 FAKE_PROVIDER = ProviderDescriptorV1(
     provider="stub",
