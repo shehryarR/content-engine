@@ -263,6 +263,8 @@ class DIDAvatarProvider(StageProvider):
 
         image_data = get_artifact(identity_ref)
         audio_data = get_artifact(audio_ref)
+        print(f"[did_avatar] identity image: {len(image_data) / 1_000_000:.2f} MB")
+        print(f"[did_avatar] voice audio:    {len(audio_data) / 1_000_000:.2f} MB")
 
         # D-ID requires URLs for the actual /talks request, so upload
         # both locally stored artifacts to D-ID temporary storage first.
