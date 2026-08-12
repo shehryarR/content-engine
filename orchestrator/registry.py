@@ -59,7 +59,8 @@ def try_register_real_providers() -> list[str]:
         cfg = load_provider_config('script_generation')
         if cfg.get('api_key'):
             
-            register(GeminiScriptProvider())
+            
+            register(OpenAIScriptProvider())
             real.append('script_generation')
             print("script_generation stub overwritten")
     except Exception as e:
