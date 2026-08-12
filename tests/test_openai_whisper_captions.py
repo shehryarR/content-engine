@@ -33,11 +33,10 @@ FAKE_ENVELOPE = StageEnvelopeV1(
     provider=FAKE_PROVIDER,
 )
 
-
-@patch("providers.openai_whisper_captions.load_provider_config")
-@patch("providers.openai_whisper_captions.get_artifact")
-@patch("providers.openai_whisper_captions.put_artifact")
-@patch("providers.openai_whisper_captions.OpenAI")
+@patch("providers.real.openai_whisper_captions.load_provider_config")
+@patch("providers.real.openai_whisper_captions.get_artifact")
+@patch("providers.real.openai_whisper_captions.put_artifact")
+@patch("providers.real.openai_whisper_captions.OpenAI")
 def test_caption_provider_returns_caption_track(
     mock_openai_cls, mock_put, mock_get, mock_cfg
 ):
@@ -77,8 +76,8 @@ def test_caption_provider_returns_caption_track(
     assert data["words"][0]["start"] == 0.0
 
 
-@patch("providers.openai_whisper_captions.load_provider_config")
-@patch("providers.openai_whisper_captions.OpenAI")
+@patch("providers.real.openai_whisper_captions.load_provider_config")
+@patch("providers.real.openai_whisper_captions.OpenAI")
 def test_caption_provider_raises_if_no_audio(mock_openai_cls, mock_cfg):
     mock_cfg.return_value = {"api_key": "test-key"}
     mock_openai_cls.return_value = MagicMock()

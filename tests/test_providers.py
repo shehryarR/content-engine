@@ -108,7 +108,7 @@ def test_voice_provider_run(voice_provider, sample_envelope, mock_artifact_ref):
         pytest.skip(f"Fixture file not found: {fixture_path}")
 
     # Mock put_artifact in the stub_voice module directly
-    with patch("providers.stub_voice.put_artifact") as mock_put:
+    with patch("providers.stub.stub_voice.put_artifact") as mock_put:
         mock_put.return_value = mock_artifact_ref
         
         # Register the provider
@@ -155,7 +155,7 @@ def test_avatar_provider_run(avatar_provider, sample_envelope, mock_video_ref):
         pytest.skip(f"Fixture file not found: {fixture_path}")
 
     # Mock put_artifact in the stub_avatar module directly
-    with patch("providers.stub_avatar.put_artifact") as mock_put:
+    with patch("providers.stub.stub_avatar.put_artifact") as mock_put:
         mock_put.return_value = mock_video_ref
         
         register(avatar_provider)
@@ -190,8 +190,8 @@ def test_sync_provider_interface(sync_provider):
 
 def test_sync_provider_run_with_existing_artifact(sync_provider, sample_envelope, mock_video_ref):
     """Test sync provider when video artifact is in envelope."""
-    with patch("providers.stub_sync.get_artifact") as mock_get, \
-         patch("providers.stub_sync.put_artifact") as mock_put:
+    with patch("providers.stub.stub_sync.get_artifact") as mock_get, \
+         patch("providers.stub.stub_sync.put_artifact") as mock_put:
         mock_get.return_value = b"fake video bytes"
         stored_ref = ArtifactRefV1(
             artifact_id="sync_test_run_s40",
@@ -246,7 +246,7 @@ def test_voice_provider_artifact_persistence(voice_provider, sample_envelope, mo
     register(voice_provider)
 
     # Mock put_artifact in the stub_voice module directly (not orchestrator.storage)
-    with patch("providers.stub_voice.put_artifact") as mock_put:
+    with patch("providers.stub.stub_voice.put_artifact") as mock_put:
         mock_put.return_value = mock_artifact_ref
 
         output = voice_provider.run(sample_envelope,"test_run_s20")
@@ -271,7 +271,7 @@ def test_avatar_provider_artifact_persistence(avatar_provider, sample_envelope, 
     sample_envelope.stage_id = "S30"
 
     # Mock put_artifact in the stub_avatar module directly
-    with patch("providers.stub_avatar.put_artifact") as mock_put:
+    with patch("providers.stub.stub_avatar.put_artifact") as mock_put:
         mock_put.return_value = mock_video_ref
 
         output = avatar_provider.run(sample_envelope, "test_run_s30")
@@ -288,8 +288,8 @@ def test_avatar_provider_artifact_persistence(avatar_provider, sample_envelope, 
 
 def test_sync_provider_copies_artifact(sync_provider, sample_envelope, mock_video_ref):
     """Test that sync provider picks the first video artifact and stores it under its own S40 id."""
-    with patch("providers.stub_sync.get_artifact") as mock_get, \
-         patch("providers.stub_sync.put_artifact") as mock_put:
+    with patch("providers.stub.stub_sync.get_artifact") as mock_get, \
+     patch("providers.stub.stub_sync.put_artifact") as mock_put:
         mock_get.return_value = b"fake video bytes"
         stored_ref = ArtifactRefV1(
             artifact_id="sync_test_run_s40",
@@ -352,7 +352,7 @@ def test_stub_script_provider_run():
         mime_type="application/json",
     )
 
-    with patch("providers.stub_script.put_artifact") as mock_put:
+    with patch("providers.stub.stub_script.put_artifact") as mock_put:
         mock_put.return_value = mock_artifact_ref
         output = provider.run(envelope, run_id)
 
