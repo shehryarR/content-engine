@@ -116,7 +116,10 @@ class DIDAvatarProvider(StageProvider):
             timeout=180,
         )
 
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
         data = response.json()
         audio_url = data.get("url")
@@ -147,11 +150,16 @@ class DIDAvatarProvider(StageProvider):
                     "type": "audio",
                     "audio_url": audio_url,
                 },
+                "config": {
+                    "stitch": True,
+                },
             },
             timeout=180,
         )
-
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
         data = response.json()
         talk_id = data.get("id")
@@ -174,8 +182,10 @@ class DIDAvatarProvider(StageProvider):
                 headers=self._headers,
                 timeout=180,
             )
-
-            response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
             data = response.json()
             status = data.get("status")
@@ -253,6 +263,8 @@ class DIDAvatarProvider(StageProvider):
 
         image_data = get_artifact(identity_ref)
         audio_data = get_artifact(audio_ref)
+        print(f"[did_avatar] identity image: {len(image_data) / 1_000_000:.2f} MB")
+        print(f"[did_avatar] voice audio:    {len(audio_data) / 1_000_000:.2f} MB")
 
         # D-ID requires URLs for the actual /talks request, so upload
         # both locally stored artifacts to D-ID temporary storage first.
@@ -265,6 +277,8 @@ class DIDAvatarProvider(StageProvider):
             audio_data,
             audio_ref.mime_type,
         )
+        print(f"[did_avatar] D-ID image_url: {image_url}")
+        print(f"[did_avatar] D-ID audio_url: {audio_url}")
 
         # Start asynchronous avatar generation.
         talk_id = self._create_talk(
@@ -279,7 +293,10 @@ class DIDAvatarProvider(StageProvider):
             result_url,
             timeout=120,
         )
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
         video_data = response.content
 

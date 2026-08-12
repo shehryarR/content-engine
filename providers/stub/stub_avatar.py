@@ -22,7 +22,7 @@ class StubAvatarProvider(StageProvider):
     def run(self, envelope: StageEnvelopeV1,run_id:str) -> StageOutputV1:
         
         
-        fixture_path = Path(__file__).parent.parent / "fixtures" / "stubs" / "black_5s.mp4"
+        fixture_path = Path(__file__).parent.parent.parent / "fixtures" / "stubs" / "black_5s.mp4"  
         
         if not fixture_path.exists():
             raise FileNotFoundError(

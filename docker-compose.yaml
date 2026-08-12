@@ -3,18 +3,18 @@ services:
     container_name: temporal-postgresql
     image: postgres:16
     environment:
-      POSTGRES_USER: temporal
-      POSTGRES_PASSWORD: temporal
-      POSTGRES_DB: content_engine
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     ports:
-      - "5432:5432"
+      - "${DB_PORT}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./sql/create_manifest_stage_records.sql:/docker-entrypoint-initdb.d/02-manifest.sql:ro
       - ./sql/create_stage_run_records.sql:/docker-entrypoint-initdb.d/03-telemetry.sql:ro
       - ./sql/create_registry_profiles.sql:/docker-entrypoint-initdb.d/04-registry.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U temporal -d content_engine"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -27,9 +27,9 @@ services:
         condition: service_healthy
     environment:
       DB: postgres12
-      DB_PORT: 5432
-      POSTGRES_USER: temporal
-      POSTGRES_PWD: temporal
+      DB_PORT: ${DB_PORT}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PWD: ${DB_PASSWORD}
       POSTGRES_SEEDS: postgresql
     ports:
       - "7233:7233"
@@ -49,8 +49,8 @@ services:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -61,12 +61,16 @@ services:
     image: minio/mc
     depends_on:
       - minio
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      ARTIFACT_BUCKET: ${ARTIFACT_BUCKET}
     entrypoint: >
       /bin/sh -c "
-      until (/usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin) do
+      until (/usr/bin/mc alias set local http://minio:9000 \$$S3_ACCESS_KEY_ID \$$S3_SECRET_ACCESS_KEY) do
         echo 'waiting for minio...' && sleep 1;
       done;
-      /usr/bin/mc mb --ignore-existing local/avatar-harness-poc;
+      /usr/bin/mc mb --ignore-existing local/\$$ARTIFACT_BUCKET;
       echo 'bucket ready';
       exit 0;
       "
