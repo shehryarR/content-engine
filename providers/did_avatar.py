@@ -147,6 +147,9 @@ class DIDAvatarProvider(StageProvider):
                     "type": "audio",
                     "audio_url": audio_url,
                 },
+                "config": {
+                    "stitch": True,
+                },
             },
             timeout=180,
         )
