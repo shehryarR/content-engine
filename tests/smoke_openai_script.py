@@ -8,7 +8,7 @@ from contracts.common.envelope import (
 )
 from contracts.stages.s10_script import ScriptPackageV1
 from orchestrator.storage import put_artifact
-from providers.openai_script import OpenAIScriptProvider
+from providers.real.openai_script import OpenAIScriptProvider
 
 
 def main():
