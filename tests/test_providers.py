@@ -371,22 +371,25 @@ def test_stub_script_provider_run():
 
 def test_stub_qc_provider_satisfies_protocol_and_runs():
     """Verify that StubQCProvider satisfies StageProvider and returns valid QualityReportV1."""
+    from orchestrator.storage import put_artifact
+    from pathlib import Path
+
     provider = StubQCProvider()
     assert isinstance(provider, StageProvider)
     assert provider.capability == "quality_control"
+
+    fixture_bytes = (Path("fixtures") / "stubs" / "black_5s.mp4").read_bytes()
+    video_artifact = put_artifact(
+        data=fixture_bytes,
+        artifact_id="master_video_test_run_s70",
+        mime_type="video/mp4",
+    )
 
     envelope = StageEnvelopeV1(
         stage_id="S70",
         attempt=1,
         input_hash="b" * 64,
-        artifact_refs=[
-            ArtifactRefV1(
-                artifact_id="master_video_test",
-                path="s3://avatar-harness-poc/artifacts/master_video_test.mp4",
-                hash="d" * 64,
-                mime_type="video/mp4",
-            )
-        ],
+        artifact_refs=[video_artifact],
         validation_ref=None,
         provider=ProviderDescriptorV1(
             provider="stub_qc_provider",
@@ -398,13 +401,12 @@ def test_stub_qc_provider_satisfies_protocol_and_runs():
 
     output = provider.run(envelope, "test_run_s70")
     assert isinstance(output, StageOutputV1)
-    assert output.metadata.get("passed") is True
 
     report = QualityReportV1.model_validate(output.payload)
     assert report.run_id == "test_run_s70"
-    assert report.master_video_hash == "d" * 64
-    assert report.passed is True
-    assert "identity_similarity" in report.metrics
+    assert report.master_video_hash == video_artifact.hash
+    assert "has_video_stream" in report.metrics
+    assert "sync_score" in report.metrics
 
 
 def test_stub_disclosure_provider_satisfies_protocol_and_runs():
