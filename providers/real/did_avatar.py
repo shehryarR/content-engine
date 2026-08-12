@@ -277,6 +277,8 @@ class DIDAvatarProvider(StageProvider):
             audio_data,
             audio_ref.mime_type,
         )
+        print(f"[did_avatar] D-ID image_url: {image_url}")
+        print(f"[did_avatar] D-ID audio_url: {audio_url}")
 
         # Start asynchronous avatar generation.
         talk_id = self._create_talk(
