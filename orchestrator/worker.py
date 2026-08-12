@@ -4,14 +4,16 @@ orchestrator/worker.py
 The worker process. Registers both the hello-world workflow (stack health check)
 and the real AvatarPipeline workflow.
 """
-
+from dotenv import load_dotenv
+load_dotenv()
 import asyncio
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 
-from orchestrator.hello_workflow import HelloWorkflow, say_hello, TASK_QUEUE
+
+
 from orchestrator.pipeline import AvatarPipeline
 from orchestrator.activities import run_stage
 

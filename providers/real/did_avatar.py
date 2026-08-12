@@ -116,7 +116,10 @@ class DIDAvatarProvider(StageProvider):
             timeout=180,
         )
 
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
         data = response.json()
         audio_url = data.get("url")
@@ -153,8 +156,10 @@ class DIDAvatarProvider(StageProvider):
             },
             timeout=180,
         )
-
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
         data = response.json()
         talk_id = data.get("id")
@@ -177,8 +182,10 @@ class DIDAvatarProvider(StageProvider):
                 headers=self._headers,
                 timeout=180,
             )
-
-            response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
             data = response.json()
             status = data.get("status")
@@ -282,7 +289,10 @@ class DIDAvatarProvider(StageProvider):
             result_url,
             timeout=120,
         )
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                f"D-ID API error {response.status_code}: {response.text}"
+            )
 
         video_data = response.content
 

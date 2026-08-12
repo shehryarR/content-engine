@@ -11,7 +11,7 @@ from providers.stub.stub_disclosure import StubDisclosureProvider
 from providers.stub.stub_publish import StubPublishProvider
 from providers.real.openai_whisper_captions import OpenAIWhisperCaptionsProvider
 from providers.real.gemini_script import GeminiScriptProvider
-from providers.stub.did_avatar import DIDAvatarProvider
+from providers.real.did_avatar import DIDAvatarProvider
 from providers.real.elevenlabs_voice import ElevenLabsVoiceProvider
 from orchestrator.provider_config import load_provider_config
 
