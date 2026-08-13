@@ -21,7 +21,7 @@ from orchestrator.storage import get_artifact
 
 from providers.stub.stub_intake import StubIntakeProvider
 from providers.stub.stub_captions import StubCaptionsProvider
-from providers.assembly import AssemblyProvider
+from providers.real.assembly import AssemblyProvider
 from contracts.stages.idea_request import IdeaRequestV1, Modality
 
 

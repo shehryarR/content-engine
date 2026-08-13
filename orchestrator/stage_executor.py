@@ -14,14 +14,37 @@ the provider's.
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Callable
+
+from temporalio.exceptions import ApplicationError
 
 from contracts.common.envelope import ArtifactRefV1, StageEnvelopeV1, StageOutputV1, ValidationReportV1
 from contracts.common.manifest import StageRecordV1, StageStatus
 from contracts.common.telemetry import StageRunRecordV1
+from contracts.common.validation_failure import ValidationFailureV1
+from graph.pipeline_graph import STAGE_SEQUENCE
 from orchestrator.manifest_store import save_stage_record
 from orchestrator.registry import get as get_provider
 from orchestrator.storage import get_artifact, put_artifact
 from orchestrator.telemetry import record_telemetry
+
+# In-memory, process-lifetime cache of verified stage results, keyed by
+# canonical input (envelope.input_hash + provider descriptor + upstream
+# artifact hashes). Lets a stage re-execution (e.g. a local correction
+# retry, or an activity-level re-run) reuse a prior attempt's already-
+# verified artifacts instead of re-invoking the provider.
+_stage_result_cache: dict[str, tuple[StageOutputV1, ArtifactRefV1]] = {}
+
+
+def _compute_cache_key(envelope: StageEnvelopeV1) -> str:
+    key_material = {
+        "input_hash": envelope.input_hash,
+        "provider": envelope.provider.model_dump(mode="json"),
+        "upstream_hashes": sorted(ref.hash for ref in envelope.artifact_refs),
+    }
+    return hashlib.sha256(
+        json.dumps(key_material, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
 
 def _verify_artifact_hashes(output: StageOutputV1, stage_id: str) -> ValidationReportV1:
@@ -51,6 +74,17 @@ def _verify_artifact_hashes(output: StageOutputV1, stage_id: str) -> ValidationR
     )
 
 
+# Per-stage validator registration. Every stage in STAGE_SEQUENCE gets a
+# slot here; today they all resolve to the generic hash-check. Stage-
+# specific validation logic (beyond hash verification) plugs in by
+# overriding a stage's entry, not by changing execute_stage.
+StageValidator = Callable[[StageOutputV1, str], ValidationReportV1]
+
+STAGE_VALIDATORS: dict[str, StageValidator] = {
+    stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
+}
+
+
 def execute_stage(
     run_id: str,
     idea_request_id: str,
@@ -68,25 +102,45 @@ def execute_stage(
     started_at = datetime.now(timezone.utc)
 
     provider = get_provider(capability)
-    if idea_dict is not None:
-        output = provider.run(envelope, run_id, idea_dict)
+    cache_key = _compute_cache_key(envelope)
+    cached = _stage_result_cache.get(cache_key)
+
+    if cached is not None:
+        output, validation_ref = cached
     else:
-        output = provider.run(envelope, run_id)
-    # Checkpoint promotion: hash verification must pass before PASSED is written
-    validation_report = _verify_artifact_hashes(output, envelope.stage_id)
+        if idea_dict is not None:
+            output = provider.run(envelope, run_id, idea_dict)
+        else:
+            output = provider.run(envelope, run_id)
 
-    if not validation_report.passed:
-        raise ValueError(
-            f"Stage {envelope.stage_id} failed hash verification: {validation_report.failures}"
+        # Checkpoint promotion: validation must pass before PASSED is written
+        validator = STAGE_VALIDATORS.get(envelope.stage_id, _verify_artifact_hashes)
+        validation_report = validator(output, envelope.stage_id)
+
+        if not validation_report.passed:
+            failure = ValidationFailureV1(
+                stage_id=envelope.stage_id,
+                failure_type="hash_mismatch",
+                message=f"Stage {envelope.stage_id} failed hash verification: {validation_report.failures}",
+                feedback_context="; ".join(validation_report.failures),
+            )
+            # non_retryable: Temporal's own retry policy would just replay
+            # this exact envelope; the correction retry (if any) belongs to
+            # pipeline.py, which re-invokes this stage with attempt += 1.
+            raise ApplicationError(
+                failure.message,
+                failure.model_dump(mode="json"),
+                type="ValidationFailure",
+                non_retryable=True,
+            )
+
+        report_bytes = validation_report.model_dump_json().encode("utf-8")
+        validation_ref = put_artifact(
+            data=report_bytes,
+            artifact_id=f"validation_{envelope.stage_id}_attempt{envelope.attempt}",
+            mime_type="application/json",
         )
-
-    
-    report_bytes = validation_report.model_dump_json().encode("utf-8")
-    validation_ref = put_artifact(
-        data=report_bytes,
-        artifact_id=f"validation_{envelope.stage_id}_attempt{envelope.attempt}",
-        mime_type="application/json",
-    )
+        _stage_result_cache[cache_key] = (output, validation_ref)
 
     ended_at = datetime.now(timezone.utc)
 
