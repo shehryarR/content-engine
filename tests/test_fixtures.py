@@ -42,6 +42,8 @@ from contracts.registry.identity_profile import IdentityProfileV1
 from contracts.registry.voice_profile import VoiceProfileV1
 from contracts.stages.s20_voice import VoiceTrackV1
 from contracts.stages.s30_avatar import VisualRequestV1, PrimaryVisualTrackV1
+from contracts.common.validation_failure import ValidationFailureV1
+from contracts.common.correction_plan import CorrectionPlanV1
 
 VALID_FIXTURES = [
     ("fixtures/valid/style_profile.json", StyleProfileV1),
@@ -72,6 +74,8 @@ VALID_FIXTURES = [
     ("fixtures/valid/visual_request_avatar.json", VisualRequestV1),
     ("fixtures/valid/visual_request_faceless.json", VisualRequestV1),
     ("fixtures/valid/primary_visual_track.json", PrimaryVisualTrackV1),
+    ("fixtures/valid/validation_failure.json", ValidationFailureV1),
+    ("fixtures/valid/correction_plan.json", CorrectionPlanV1),
 ]
 
 MALFORMED_FIXTURES = [
@@ -101,6 +105,8 @@ MALFORMED_FIXTURES = [
     ("fixtures/malformed/voice_track_zero_duration.json", VoiceTrackV1),
     ("fixtures/malformed/visual_request_zero_scenes.json", VisualRequestV1),
     ("fixtures/malformed/primary_visual_track_missing_artifact.json", PrimaryVisualTrackV1),
+    ("fixtures/malformed/validation_failure_missing_message.json", ValidationFailureV1),
+    ("fixtures/malformed/correction_plan_negative_retry_budget.json", CorrectionPlanV1),
 ]
 
 

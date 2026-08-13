@@ -8,6 +8,7 @@ primary workflow the worker runs.
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     import hashlib
@@ -17,12 +18,18 @@ with workflow.unsafe.imports_passed_through():
         StageEnvelopeV1,
         ArtifactRefV1,
     )
+    from contracts.common.correction_plan import CorrectionPlanV1, DEFAULT_RETRY_BUDGET
+    from contracts.common.validation_failure import ValidationFailureV1
     from contracts.stages.g80_approval import HumanApprovalV1
     from graph.pipeline_graph import STAGE_SEQUENCE
 import asyncio
 
 TASK_QUEUE = "avatar-harness"
 STAGE_TIMEOUT = timedelta(minutes=5)
+
+# Failure types a local correction retry can plausibly fix. Anything else
+# (e.g. a provider outage) isn't worth re-running the same stage for.
+RETRYABLE_VALIDATION_FAILURE_TYPES = {"hash_mismatch"}
 
 
 
@@ -53,6 +60,60 @@ def _build_envelope(
         ),
     )
     return envelope.model_dump()
+
+
+async def _run_stage_with_correction(
+    stage_id: str,
+    capability: str,
+    run_id: str,
+    artifact_refs: list[dict],
+    validation_ref: dict | None,
+) -> dict:
+    """
+    Run one stage via the generic run_stage Activity, retrying that same
+    stage_id locally (attempt += 1, upstream artifact_refs left untouched)
+    when the activity fails with a ValidationFailureV1. Any other activity
+    failure (timeouts, worker crashes, non-validation errors) is re-raised
+    and left to Temporal's own retry policy / workflow failure handling.
+    """
+    attempt = 1
+    while True:
+        envelope_dict = _build_envelope(
+            stage_id,
+            capability,
+            run_id,
+            artifact_refs=artifact_refs,
+            attempt=attempt,
+            validation_ref=validation_ref,
+        )
+        try:
+            return await workflow.execute_activity(
+                "run_stage",
+                args=[capability, envelope_dict, run_id, run_id],
+                start_to_close_timeout=STAGE_TIMEOUT,
+            )
+        except ActivityError as exc:
+            cause = exc.cause
+            if not isinstance(cause, ApplicationError) or cause.type != "ValidationFailure":
+                raise
+            failure = ValidationFailureV1.model_validate(cause.details[0])
+            plan = CorrectionPlanV1(
+                stage_id=stage_id,
+                retryable=(
+                    failure.failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES
+                    and attempt < DEFAULT_RETRY_BUDGET
+                ),
+                feedback_context=failure.feedback_context,
+            )
+            if not plan.retryable:
+                raise
+            workflow.logger.warning(
+                f"Stage {stage_id} attempt {attempt} failed validation "
+                f"({failure.failure_type}): {failure.message}. Retrying "
+                f"(budget {plan.retry_budget})."
+            )
+            attempt += 1
+
 
 @workflow.defn
 class AvatarPipeline:
@@ -132,17 +193,12 @@ class AvatarPipeline:
             for prior_output in self._stage_outputs.values():
                 prior_artifact_refs.extend(prior_output.get("artifact_refs", []))
 
-            envelope_dict = _build_envelope(
+            output_dict = await _run_stage_with_correction(
                 stage_id,
                 capability,
                 run_id,
-                artifact_refs=prior_artifact_refs,
-                validation_ref=last_validation_ref
-            )
-            output_dict = await workflow.execute_activity(
-                "run_stage",
-                args=[capability, envelope_dict, run_id, run_id],
-                start_to_close_timeout=STAGE_TIMEOUT,
+                prior_artifact_refs,
+                last_validation_ref,
             )
             last_validation_ref = output_dict.pop("_validation_ref", None)
             self._stage_outputs[stage_id] = output_dict
@@ -181,17 +237,12 @@ class AvatarPipeline:
             for prior_output in self._stage_outputs.values():
                 prior_artifact_refs.extend(prior_output.get("artifact_refs", []))
 
-            envelope_dict = _build_envelope(
+            output_dict = await _run_stage_with_correction(
                 stage_id,
                 capability,
                 run_id,
-                artifact_refs=prior_artifact_refs,
-                validation_ref=last_validation_ref,
-            )
-            output_dict = await workflow.execute_activity(
-                "run_stage",
-                args=[capability, envelope_dict, run_id, run_id],
-                start_to_close_timeout=STAGE_TIMEOUT,
+                prior_artifact_refs,
+                last_validation_ref,
             )
             last_validation_ref = output_dict.pop("_validation_ref", None)
             self._stage_outputs[stage_id] = output_dict
