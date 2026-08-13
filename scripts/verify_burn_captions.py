@@ -1,6 +1,6 @@
 """Manual verification for S60 caption burn-in. Not a pytest test — run directly and inspect the output video."""
 from pathlib import Path
-from providers.assembly import _burn_captions, _words_to_srt
+from providers.real.assembly import _burn_captions, _words_to_srt
 
 TEST_VIDEO = Path("/tmp/test_input.mp4")
 OUTPUT_VIDEO = Path("/tmp/burned_test.mp4")

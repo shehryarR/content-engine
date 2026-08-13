@@ -1,5 +1,5 @@
 """
-providers/stub_assembly.py
+providers/real/assembly.py
 S60 Assembly Provider.
 Fetches real S20 audio and S40 video artifacts from the envelope,
 muxes them via ffmpeg into a single output file, burns in S50 captions,
@@ -226,3 +226,58 @@ class AssemblyProvider:
             },
             artifact_refs=[artifact],
         )
+
+
+# --- S60 exit validator (standalone until Ammar's ValidationFailureV1/
+# correction-loop wiring lands — Parts 5/6 blocked on that, see M3 Day 1 doc) ---
+
+def _has_video_stream(video_bytes: bytes) -> bool:
+    """Return True if the video bytes contain a video stream."""
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(video_bytes)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", tmp_path],
+            capture_output=True, text=True, timeout=10
+        )
+        data = json.loads(result.stdout)
+        return any(s.get("codec_type") == "video" for s in data.get("streams", []))
+    except Exception:
+        return False
+    finally:
+        os.unlink(tmp_path)
+
+
+def validate_assembly(
+    video_bytes: bytes,
+    expected_audio_duration: float | None = None,
+    tolerance: float = 2.0,
+) -> tuple[bool, list[str]]:
+    """Checks: encode succeeded (non-empty, valid), duration in expected
+    range vs S20 audio, both audio+video streams present. Returns
+    (passed, failure_reasons)."""
+    failures: list[str] = []
+
+    if not video_bytes:
+        return False, ["assembled video is empty (failed encode)"]
+
+    if not _has_video_stream(video_bytes):
+        failures.append("no video stream present in assembled output")
+    if not _has_audio_stream(video_bytes):
+        failures.append("no audio stream present in assembled output")
+
+    duration = _measure_duration(video_bytes)
+    if duration <= 0:
+        failures.append("assembled video has zero/invalid duration")
+    elif expected_audio_duration is not None:
+        diff = abs(duration - expected_audio_duration)
+        if diff > tolerance:
+            failures.append(
+                f"assembled duration {duration:.2f}s differs from expected "
+                f"audio duration {expected_audio_duration:.2f}s by {diff:.2f}s "
+                f"(tolerance {tolerance}s)"
+            )
+
+    return len(failures) == 0, failures
