@@ -135,6 +135,12 @@
   <h2>3. Synthetic Media Compliance</h2>
   <p>In adherence to Google and YouTube API policies, all media processed by the platform carrying synthetic voice or avatar components is hard-coded to trigger the compulsory <code>syntheticMediaDisclosure</code> flag during upload transmission.</p>
 
+  <h2>4. Data Protection and Security</h2>
+  <p>YouTube OAuth tokens are transmitted exclusively over HTTPS/TLS and are never written to application logs, error reports, or persistent disk storage. Access to any in-memory token data is restricted to the automated pipeline process itself, with no direct access by team members during normal operation.</p>
+
+  <h2>5. Data Retention and Deletion</h2>
+  <p>OAuth tokens are retained only in memory for the duration of an active pipeline execution and are discarded immediately upon session completion or failure. No Google user data is retained beyond the lifetime of a single upload operation. Users may revoke Avatar Harness's access at any time via their <a href="https://myaccount.google.com/permissions" style="color: var(--accent-cyan);">Google Account permissions page</a>, which immediately and permanently invalidates any associated token.</p>
+
   <div class="card">
     <span class="label">PRIVACY CONTACT</span>
     <p style="margin:0; color: var(--text);">Direct inquiries to: <a href="mailto:privacy@avatarharness.io" style="color: var(--accent-cyan); text-decoration: none;">privacy@avatarharness.io</a></p>
