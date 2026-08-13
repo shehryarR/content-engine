@@ -1,0 +1,6 @@
+{
+  "stage_id": "S60",
+  "retryable": true,
+  "feedback_context": "Re-render with the corrected source clip.",
+  "retry_budget": 2
+}
