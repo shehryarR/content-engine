@@ -79,6 +79,8 @@ class OpenAIScriptProvider:
                 "S10 requires a non-empty voice_id."
             )
 
+        from orchestrator.stage_executor import get_stage_feedback
+        feedback = get_stage_feedback(run_id, envelope.stage_id)
         topic = idea_request.topic
 
         try:
@@ -91,7 +93,7 @@ class OpenAIScriptProvider:
                     },
                     {
                         "role": "user",
-                        "content": build_script_prompt(topic),
+                        "content": build_script_prompt(topic, feedback),
                     },
                 ],
                 response_format={"type": "json_object"},

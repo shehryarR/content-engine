@@ -65,11 +65,13 @@ class GeminiScriptProvider:
                 "S10 requires a non-empty voice_id."
             )
 
+        from orchestrator.stage_executor import get_stage_feedback
+        feedback = get_stage_feedback(run_id, envelope.stage_id)
         topic = idea_request.topic
 
         response = self._client.models.generate_content(
             model=self._model_name,
-            contents=build_script_prompt(topic),
+            contents=build_script_prompt(topic, feedback),
             config={
                 "system_instruction": SCRIPT_GENERATION_SYSTEM_PROMPT,
             },
