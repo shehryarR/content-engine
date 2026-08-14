@@ -35,6 +35,15 @@ from orchestrator.telemetry import record_telemetry
 # verified artifacts instead of re-invoking the provider.
 _stage_result_cache: dict[str, tuple[StageOutputV1, ArtifactRefV1]] = {}
 
+# In-memory cache of validation failures/feedback context to thread context
+# on retry without altering StageEnvelopeV1 or pipeline.py contracts.
+_stage_feedback_cache: dict[str, str] = {}
+
+
+def get_stage_feedback(run_id: str, stage_id: str) -> str | None:
+    """Retrieve feedback context for a retried stage execution."""
+    return _stage_feedback_cache.get(f"{run_id}_{stage_id}")
+
 
 def _compute_cache_key(envelope: StageEnvelopeV1) -> str:
     key_material = {
@@ -138,7 +147,7 @@ def _validate_s10_script(
             combined_length = sum(len(scene) for scene in scenes)
 
             if combined_length > 1500:
-                failures.append(f"S10 combined scene length is {combined_length} ""characters; hard cap is 1500.")
+                failures.append(f"S10 combined scene length is {combined_length} characters; hard cap is 1500.")
 
     return ValidationReportV1(
         passed=len(failures) == 0,
@@ -146,6 +155,39 @@ def _validate_s10_script(
         stage_id=stage_id,
         failure_type="malformed_script" if failures else None,
     )
+
+
+def _validate_s10(
+    output: StageOutputV1,
+    stage_id: str,
+    envelope: StageEnvelopeV1,
+) -> ValidationReportV1:
+    hash_report = _verify_artifact_hashes(output, stage_id, envelope)
+    script_report = _validate_s10_script(output, stage_id, envelope)
+
+    failures = hash_report.failures + script_report.failures
+
+    if not failures:
+        return ValidationReportV1(
+            passed=True,
+            failures=[],
+            stage_id=stage_id,
+            failure_type=None,
+        )
+
+    failure_type = (
+        "malformed_script"
+        if script_report.failures
+        else hash_report.failure_type
+    )
+
+    return ValidationReportV1(
+        passed=False,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=failure_type,
+    )
+
 # Per-stage validator registration. Every stage in STAGE_SEQUENCE gets a
 # slot here; today they all resolve to the generic hash-check. Stage-
 # specific validation logic (beyond hash verification) plugs in by
@@ -177,7 +219,7 @@ STAGE_VALIDATORS: dict[str, StageValidator] = {
     stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
 }
 
-STAGE_VALIDATORS["S10"] = _validate_s10_script
+STAGE_VALIDATORS["S10"] = _validate_s10
 
 def execute_stage(
     run_id: str,
@@ -219,6 +261,8 @@ def execute_stage(
                 message=f"Stage {envelope.stage_id} failed validation ({failure_type}): {validation_report.failures}",
                 feedback_context="; ".join(validation_report.failures),
             )
+            # Cache feedback context for retry
+            _stage_feedback_cache[f"{run_id}_{envelope.stage_id}"] = failure.feedback_context or ""
             # non_retryable: Temporal's own retry policy would just replay
             # this exact envelope; the correction retry (if any) belongs to
             # pipeline.py, which re-invokes this stage with attempt += 1.
@@ -228,6 +272,9 @@ def execute_stage(
                 type="ValidationFailure",
                 non_retryable=True,
             )
+
+        # Clear feedback context on success
+        _stage_feedback_cache.pop(f"{run_id}_{envelope.stage_id}", None)
 
         report_bytes = validation_report.model_dump_json().encode("utf-8")
         validation_ref = put_artifact(
