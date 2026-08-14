@@ -1,6 +1,6 @@
 {
   "additionalProperties": false,
-  "description": "Result of running a stage's validator(s) against its output.\n\nMinimum required per the runbook:\n    - pass/fail\n    - failure list",
+  "description": "Result of running a stage's validator(s) against its output.\n\nMinimum required per the runbook:\n    - pass/fail\n    - failure list\n\nfailure_type is machine-readable, distinct from `failures` (which is\nthe human-readable message list). A validator that fails should set\nboth: `failures` for a person reading a log or dashboard, `failure_type`\nfor code deciding what to do next (e.g. whether pipeline.py's\ncorrection loop should retry this stage locally).",
   "properties": {
     "passed": {
       "description": "Whether the stage's output passed validation.",
@@ -19,6 +19,19 @@
       "description": "Stage/gate this validation report applies to.",
       "title": "Stage Id",
       "type": "string"
+    },
+    "failure_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Machine-readable failure category set by the validator that produced this report, e.g. 'hash_mismatch', 'duration_mismatch', 'missing_captions'. None when passed=True, or when a validator hasn't been updated to set one - callers should not assume a missing failure_type means 'hash_mismatch'.",
+      "title": "Failure Type"
     },
     "validated_at": {
       "description": "UTC timestamp when validation ran.",
