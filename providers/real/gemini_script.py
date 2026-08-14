@@ -2,6 +2,8 @@ import json
 
 from google import genai
 
+from pydantic import ValidationError
+from contracts.stages.idea_request import IdeaRequestV1
 from contracts.common.envelope import StageEnvelopeV1, StageOutputV1
 from contracts.prompts.script_generation_prompt import (
     SCRIPT_GENERATION_SYSTEM_PROMPT,
@@ -24,7 +26,7 @@ class GeminiScriptProvider:
 
     def run(self, envelope: StageEnvelopeV1, run_id: str) -> StageOutputV1:
 
-        idea_json = next(
+        idea_ref = next(
             (
                 ref
                 for ref in envelope.artifact_refs
@@ -33,13 +35,37 @@ class GeminiScriptProvider:
             None,
         )
 
+        if idea_ref is None:
+            raise ValueError(
+                "S10 requires an idea artifact in envelope.artifact_refs."
+            )
 
-        if idea_json:
-            idea_data = json.loads(get_artifact(idea_json))
-            topic = idea_data.get("topic")
+        try:
+            idea_data = json.loads(get_artifact(idea_ref))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Idea artifact {idea_ref.artifact_id} is not valid JSON."
+            ) from exc
 
-        if not topic:
-            raise ValueError("Idea artifact is missing a topic")
+        try:
+            idea_request = IdeaRequestV1.model_validate(idea_data)
+        except ValidationError as exc:
+            raise ValueError(
+                f"Idea artifact {idea_ref.artifact_id} "
+                "is not a valid IdeaRequestV1."
+            ) from exc
+
+        if not idea_request.topic.strip():
+            raise ValueError(
+                "S10 requires a non-empty topic."
+            )
+
+        if not idea_request.voice_id.strip():
+            raise ValueError(
+                "S10 requires a non-empty voice_id."
+            )
+
+        topic = idea_request.topic
 
         response = self._client.models.generate_content(
             model=self._model_name,
@@ -53,7 +79,9 @@ class GeminiScriptProvider:
         parsed = json.loads(raw)
 
         if "scenes" not in parsed:
-            raise ValueError("Gemini response missing 'scenes' field.")
+            raise ValueError(
+                "Gemini response missing 'scenes' field."
+            )
 
         script = ScriptPackageV1(
             run_id=run_id,
