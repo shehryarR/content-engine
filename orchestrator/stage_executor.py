@@ -47,13 +47,20 @@ def _compute_cache_key(envelope: StageEnvelopeV1) -> str:
     ).hexdigest()
 
 
-def _verify_artifact_hashes(output: StageOutputV1, stage_id: str) -> ValidationReportV1:
+def _verify_artifact_hashes(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
     """
     Checkpoint step: re-fetch every artifact the provider claims to have
     stored, recompute its SHA-256, and confirm it matches ref.hash before
     anything gets persisted. Returns a ValidationReportV1 recording the
     result. A stage cannot be marked PASSED until this report exists and
     passed=True.
+
+    `envelope` is accepted (and unused here) only to satisfy the shared
+    StageValidator signature - this validator has no need for envelope
+    context, but every entry in STAGE_VALIDATORS must be callable the
+    same way so execute_stage doesn't need to special-case any of them.
     """
     failures = []
     for ref in output.artifact_refs:
@@ -71,6 +78,7 @@ def _verify_artifact_hashes(output: StageOutputV1, stage_id: str) -> ValidationR
         passed=len(failures) == 0,
         failures=failures,
         stage_id=stage_id,
+        failure_type="hash_mismatch" if failures else None,
     )
 
 
@@ -78,7 +86,28 @@ def _verify_artifact_hashes(output: StageOutputV1, stage_id: str) -> ValidationR
 # slot here; today they all resolve to the generic hash-check. Stage-
 # specific validation logic (beyond hash verification) plugs in by
 # overriding a stage's entry, not by changing execute_stage.
-StageValidator = Callable[[StageOutputV1, str], ValidationReportV1]
+#
+# A custom validator receives the stage's output, the stage_id, and the
+# full envelope (so it can inspect envelope.artifact_refs - e.g. to find
+# the upstream audio artifact by mime_type - or envelope.provider). Note
+# envelope.artifact_refs only carries ArtifactRefV1s (id/path/hash/mime_type)
+# accumulated from prior stages' outputs, not their full payloads, so a
+# field like S20's duration_seconds is NOT available on the envelope
+# directly - pipeline.py only forwards artifact_refs between stages, not
+# payload. A validator that needs duration has to fetch the audio artifact
+# itself and derive it (e.g. via ffprobe), the same way stub_assembly.py's
+# duration measurement already does.
+#
+# A failing validator should set ValidationReportV1.failure_type to its own
+# machine-readable category (e.g. "duration_mismatch") rather than leaving
+# it None. execute_stage falls back to a generic label when a validator
+# doesn't set one, but that fallback is deliberately NOT "hash_mismatch" -
+# a validator's failure shouldn't be mislabeled as a hash failure just
+# because none was given. Downstream, pipeline.py's
+# RETRYABLE_VALIDATION_FAILURE_TYPES only treats known types as
+# locally-retryable, so a new failure_type needs to be added there
+# explicitly for the correction loop to retry on it.
+StageValidator = Callable[[StageOutputV1, str, StageEnvelopeV1], ValidationReportV1]
 
 STAGE_VALIDATORS: dict[str, StageValidator] = {
     stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
@@ -115,13 +144,14 @@ def execute_stage(
 
         # Checkpoint promotion: validation must pass before PASSED is written
         validator = STAGE_VALIDATORS.get(envelope.stage_id, _verify_artifact_hashes)
-        validation_report = validator(output, envelope.stage_id)
+        validation_report = validator(output, envelope.stage_id, envelope)
 
         if not validation_report.passed:
+            failure_type = validation_report.failure_type or "unspecified_validation_failure"
             failure = ValidationFailureV1(
                 stage_id=envelope.stage_id,
-                failure_type="hash_mismatch",
-                message=f"Stage {envelope.stage_id} failed hash verification: {validation_report.failures}",
+                failure_type=failure_type,
+                message=f"Stage {envelope.stage_id} failed validation ({failure_type}): {validation_report.failures}",
                 feedback_context="; ".join(validation_report.failures),
             )
             # non_retryable: Temporal's own retry policy would just replay
