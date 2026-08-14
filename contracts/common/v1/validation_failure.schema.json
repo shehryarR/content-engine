@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "description": "Records why a stage's output failed validation.",
+  "properties": {
+    "stage_id": {
+      "description": "Stage/gate whose validation failed, e.g. 'S60'.",
+      "title": "Stage Id",
+      "type": "string"
+    },
+    "failure_type": {
+      "description": "Machine-readable failure category, e.g. 'hash_mismatch'.",
+      "title": "Failure Type",
+      "type": "string"
+    },
+    "message": {
+      "description": "Human-readable description of the failure.",
+      "title": "Message",
+      "type": "string"
+    },
+    "feedback_context": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Context to carry into a retried attempt of this stage, e.g. what specifically went wrong, so the provider can correct for it on the next attempt.",
+      "title": "Feedback Context"
+    },
+    "failed_at": {
+      "description": "UTC timestamp when this validation failure was recorded.",
+      "format": "date-time",
+      "title": "Failed At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "stage_id",
+    "failure_type",
+    "message"
+  ],
+  "title": "ValidationFailureV1",
+  "type": "object"
+}
