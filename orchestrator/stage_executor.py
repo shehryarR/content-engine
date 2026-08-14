@@ -82,6 +82,70 @@ def _verify_artifact_hashes(
     )
 
 
+def _validate_s10_script(
+    output: StageOutputV1,
+    stage_id: str,
+    envelope: StageEnvelopeV1,
+) -> ValidationReportV1:
+    """
+    Deterministic exit validator for S10 script generation.
+
+    Enforces the script constraints required by the S10 prompt:
+    - scenes must be present
+    - exactly 3 scenes
+    - every scene must be a non-empty string
+    - combined scene length must never exceed the 1500-character hard cap
+    """
+    failures: list[str] = []
+
+    payload = output.payload
+
+    if not isinstance(payload, dict):
+        failures.append("S10 output payload must be a JSON object.")
+        return ValidationReportV1(
+            passed=False,
+            failures=failures,
+            stage_id=stage_id,
+            failure_type="malformed_script",
+        )
+
+    if set(payload.keys()) != {"run_id", "scenes"}:
+        failures.append(
+            "S10 output must contain exactly the 'run_id' and 'scenes' fields."
+        )
+
+    scenes = payload.get("scenes")
+
+    if not isinstance(scenes, list):
+        failures.append("S10 'scenes' must be a list.")
+    else:
+        if len(scenes) != 3:
+            failures.append(
+                f"S10 script must contain exactly 3 scenes; got {len(scenes)}."
+            )
+
+        for index, scene in enumerate(scenes, start=1):
+            if not isinstance(scene, str):
+                failures.append(
+                    f"S10 scene {index} must be a string."
+                )
+            elif not scene.strip():
+                failures.append(
+                    f"S10 scene {index} must be non-empty."
+                )
+
+        if all(isinstance(scene, str) for scene in scenes):
+            combined_length = sum(len(scene) for scene in scenes)
+
+            if combined_length > 1500:
+                failures.append(f"S10 combined scene length is {combined_length} ""characters; hard cap is 1500.")
+
+    return ValidationReportV1(
+        passed=len(failures) == 0,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type="malformed_script" if failures else None,
+    )
 # Per-stage validator registration. Every stage in STAGE_SEQUENCE gets a
 # slot here; today they all resolve to the generic hash-check. Stage-
 # specific validation logic (beyond hash verification) plugs in by
@@ -113,6 +177,7 @@ STAGE_VALIDATORS: dict[str, StageValidator] = {
     stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
 }
 
+STAGE_VALIDATORS["S10"] = _validate_s10_script
 
 def execute_stage(
     run_id: str,
