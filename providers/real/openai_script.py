@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 
 from openai import OpenAI
-
+from pydantic import ValidationError
+from contracts.stages.idea_request import IdeaRequestV1
 from contracts.common.envelope import StageEnvelopeV1, StageOutputV1
 from contracts.prompts.script_generation_prompt import (
     SCRIPT_GENERATION_SYSTEM_PROMPT,
@@ -60,12 +61,25 @@ class OpenAIScriptProvider:
                 f"Idea artifact {idea_ref.artifact_id} is not valid JSON."
             ) from exc
 
-        topic = idea_data.get("topic")
-
-        if not isinstance(topic, str) or not topic.strip():
+        try:
+            idea_request = IdeaRequestV1.model_validate(idea_data)
+        except ValidationError as exc:
             raise ValueError(
-                "Idea artifact is missing a valid non-empty topic."
+                f"Idea artifact {idea_ref.artifact_id} "
+                "is not a valid IdeaRequestV1."
+            ) from exc
+
+        if not idea_request.topic.strip():
+            raise ValueError(
+                "S10 requires a non-empty topic."
             )
+
+        if not idea_request.voice_id.strip():
+            raise ValueError(
+                "S10 requires a non-empty voice_id."
+            )
+
+        topic = idea_request.topic
 
         try:
             response = self._client.chat.completions.create(

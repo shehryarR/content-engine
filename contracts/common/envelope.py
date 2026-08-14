@@ -192,6 +192,12 @@ class ValidationReportV1(BaseModel):
     Minimum required per the runbook:
         - pass/fail
         - failure list
+
+    failure_type is machine-readable, distinct from `failures` (which is
+    the human-readable message list). A validator that fails should set
+    both: `failures` for a person reading a log or dashboard, `failure_type`
+    for code deciding what to do next (e.g. whether pipeline.py's
+    correction loop should retry this stage locally).
     """
 
     passed: bool = Field(
@@ -205,6 +211,14 @@ class ValidationReportV1(BaseModel):
     )
     stage_id: str = Field(
         ..., description="Stage/gate this validation report applies to."
+    )
+    failure_type: Optional[str] = Field(
+        default=None,
+        description="Machine-readable failure category set by the validator "
+        "that produced this report, e.g. 'hash_mismatch', "
+        "'duration_mismatch', 'missing_captions'. None when passed=True, "
+        "or when a validator hasn't been updated to set one - callers "
+        "should not assume a missing failure_type means 'hash_mismatch'.",
     )
     validated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

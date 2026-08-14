@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "Decision record for whether/how to retry a stage after a\nValidationFailureV1.",
+  "properties": {
+    "stage_id": {
+      "description": "Stage/gate this correction plan applies to.",
+      "title": "Stage Id",
+      "type": "string"
+    },
+    "retryable": {
+      "description": "Whether this failure is worth retrying locally.",
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "feedback_context": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Context carried from the ValidationFailureV1 into the retried attempt.",
+      "title": "Feedback Context"
+    },
+    "retry_budget": {
+      "default": 3,
+      "description": "Max number of local correction retries for this stage.",
+      "minimum": 0,
+      "title": "Retry Budget",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "stage_id",
+    "retryable"
+  ],
+  "title": "CorrectionPlanV1",
+  "type": "object"
+}
