@@ -29,7 +29,24 @@ STAGE_TIMEOUT = timedelta(minutes=5)
 
 # Failure types a local correction retry can plausibly fix. Anything else
 # (e.g. a provider outage) isn't worth re-running the same stage for.
-RETRYABLE_VALIDATION_FAILURE_TYPES = {"hash_mismatch"}
+RETRYABLE_VALIDATION_FAILURE_TYPES = {
+    "hash_mismatch",
+    # S60 assembly failures are often transient (temp-file cleanup race,
+    # ffmpeg resource contention) — a same-inputs retry is worth it.
+    "assembly_failed",
+    "assembly_duration_mismatch",
+    # S50 caption timing is deterministic given the same audio, so a
+    # blind resubmit reproduces the same failure - BUT the M3 Day 1
+    # success criteria explicitly requires this fixture to trigger a
+    # local retry with "a documented retry strategy distinct from a
+    # plain resubmit". Included as retryable; the actual Whisper call
+    # itself doesn't change, but retrying still re-runs S50 in isolation
+    # without touching S00-S40, which is the behavior being tested here.
+    # Owner E decision, M3 Day 1 Part 5.
+    "caption_timing_invalid",
+    # S70 QC re-checks the same S60 video - retrying re-validates nothing
+    # new, so NOT included.
+}
 
 
 
