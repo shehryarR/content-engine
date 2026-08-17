@@ -188,31 +188,7 @@ def _validate_s10(
         failure_type=failure_type,
     )
 
-# Per-stage validator registration. Every stage in STAGE_SEQUENCE gets a
-# slot here; today they all resolve to the generic hash-check. Stage-
-# specific validation logic (beyond hash verification) plugs in by
-# overriding a stage's entry, not by changing execute_stage.
-#
-# A custom validator receives the stage's output, the stage_id, and the
-# full envelope (so it can inspect envelope.artifact_refs - e.g. to find
-# the upstream audio artifact by mime_type - or envelope.provider). Note
-# envelope.artifact_refs only carries ArtifactRefV1s (id/path/hash/mime_type)
-# accumulated from prior stages' outputs, not their full payloads, so a
-# field like S20's duration_seconds is NOT available on the envelope
-# directly - pipeline.py only forwards artifact_refs between stages, not
-# payload. A validator that needs duration has to fetch the audio artifact
-# itself and derive it (e.g. via ffprobe), the same way stub_assembly.py's
-# duration measurement already does.
-#
-# A failing validator should set ValidationReportV1.failure_type to its own
-# machine-readable category (e.g. "duration_mismatch") rather than leaving
-# it None. execute_stage falls back to a generic label when a validator
-# doesn't set one, but that fallback is deliberately NOT "hash_mismatch" -
-# a validator's failure shouldn't be mislabeled as a hash failure just
-# because none was given. Downstream, pipeline.py's
-# RETRYABLE_VALIDATION_FAILURE_TYPES only treats known types as
-# locally-retryable, so a new failure_type needs to be added there
-# explicitly for the correction loop to retry on it.
+
 StageValidator = Callable[[StageOutputV1, str, StageEnvelopeV1], ValidationReportV1]
 
 STAGE_VALIDATORS: dict[str, StageValidator] = {
@@ -312,6 +288,101 @@ def execute_stage(
     record_telemetry(telemetry_record)
 
     return output, validation_ref
+# --- Owner C (S20) validator wrapper ---
+
+from providers.real.elevenlabs_voice import validate_voice
+
+
+def _validate_voice_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no audio artifact produced"],
+            stage_id=stage_id,
+            failure_type="voice_invalid",
+        )
+    audio_ref = output.artifact_refs[0]
+    audio_bytes = get_artifact(audio_ref)
+
+    passed, failures = validate_voice(audio_bytes, mime_type=audio_ref.mime_type)
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "voice_invalid",
+    )
+
+
+STAGE_VALIDATORS["S20"] = _validate_voice_stage
+
+
+# --- Owner D (S30/S40) validator wrappers ---
+#
+# See providers/real/did_avatar.py's module-level note: identity-similarity
+# scoring is NOT implemented (blocked on identity_threshold_v1.json, which
+# doesn't exist yet). These validators check video validity and duration
+# alignment only - they cannot yet distinguish "right video, wrong face"
+# from "correct render". Both failure_types below (avatar_render_invalid,
+# sync_duration_mismatch) are placeholders for that broader gap.
+
+from providers.real.did_avatar import validate_avatar_render
+from providers.stub.stub_sync import validate_sync
+
+
+def _validate_avatar_render_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no avatar render artifact produced"],
+            stage_id=stage_id,
+            failure_type="avatar_render_invalid",
+        )
+    video_bytes = get_artifact(output.artifact_refs[0])
+    audio_duration = _get_upstream_audio_duration(envelope)
+
+    passed, failures = validate_avatar_render(
+        video_bytes,
+        expected_audio_duration=audio_duration if audio_duration > 0 else None,
+    )
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "avatar_render_invalid",
+    )
+
+
+def _validate_sync_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no sync artifact produced"],
+            stage_id=stage_id,
+            failure_type="sync_duration_mismatch",
+        )
+    video_bytes = get_artifact(output.artifact_refs[0])
+    audio_duration = _get_upstream_audio_duration(envelope)
+
+    passed, failures = validate_sync(
+        video_bytes,
+        expected_audio_duration=audio_duration if audio_duration > 0 else None,
+    )
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "sync_duration_mismatch",
+    )
+
+
+STAGE_VALIDATORS["S30"] = _validate_avatar_render_stage
+STAGE_VALIDATORS["S40"] = _validate_sync_stage
 
 # --- Owner E (S50/S60/S70) validator wrappers ---
 # Each wraps the stage's own validate_*() logic (living in the provider

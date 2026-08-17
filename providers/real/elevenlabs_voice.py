@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import tempfile
 
 from elevenlabs.client import ElevenLabs
 
@@ -9,6 +12,9 @@ from orchestrator.storage import get_artifact, put_artifact
 from orchestrator.telemetry import get_connection
 
 MAX_CHARS_MULTILINGUAL_V2 = 1500  # 10k hard cap, leave headroom
+MAX_AUDIO_DURATION_SEC = 50  # ~50s * 176.4KB/s ≈ 8.8MB WAV, safe margin under D-ID's 10MB cap
+MIN_SAMPLE_RATE_HZ = 16000
+SILENCE_MEAN_VOLUME_DB_THRESHOLD = -50.0  # ffmpeg volumedetect mean_volume at/below this = effectively silent
 
 
 def _fetch_one(query: str, params: tuple) -> tuple | None:
@@ -110,3 +116,96 @@ class ElevenLabsVoiceProvider:
             },
             artifact_refs=[artifact],
         )
+
+
+
+def _probe_audio_streams(audio_bytes: bytes, suffix: str) -> list[dict]:
+    """ffprobe every stream in the audio bytes. Returns [] if the file
+    can't be probed at all (corrupt/unreadable) rather than raising -
+    the empty list itself is the "corrupt" signal to the caller."""
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(audio_bytes)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", tmp_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        data = json.loads(result.stdout)
+        return data.get("streams", [])
+    except Exception:
+        return []
+    finally:
+        os.unlink(tmp_path)
+
+
+def _measure_mean_volume_db(audio_bytes: bytes, suffix: str) -> float | None:
+    """Uses ffmpeg's volumedetect filter to get mean_volume in dB.
+    Returns None if it can't be determined (e.g. corrupt input) - the
+    caller treats None as "can't assess silence", not as silent."""
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(audio_bytes)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-i", tmp_path, "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=15,
+        )
+        for line in result.stderr.splitlines():
+            if "mean_volume:" in line:
+                return float(line.split("mean_volume:")[1].strip().split(" ")[0])
+        return None
+    except Exception:
+        return None
+    finally:
+        os.unlink(tmp_path)
+
+
+def validate_voice(
+    audio_bytes: bytes,
+    mime_type: str = "audio/mpeg",
+    max_duration_seconds: float = MAX_AUDIO_DURATION_SEC,
+) -> tuple[bool, list[str]]:
+    """
+    Checks: audio is genuinely probeable (not corrupt/truncated), has an
+    audio stream with a sane sample rate, isn't effectively silent, and
+    is within the D-ID-driven duration cap. Returns (passed, failures).
+
+    Codec is deliberately not hard-checked here - ElevenLabs' own
+    output_format setting already pins the codec at generation time
+    (mp3_44100_128 in run() above); this validator is about catching a
+    corrupt/desynced/oversized result, not re-litigating provider config.
+    """
+    failures: list[str] = []
+    suffix = ".wav" if "wav" in mime_type else ".mp3"
+
+    streams = _probe_audio_streams(audio_bytes, suffix=suffix)
+    if not streams:
+        return False, ["audio could not be probed - file is corrupt or unreadable"]
+
+    audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if audio_stream is None:
+        return False, ["no audio stream present in the file"]
+
+    sample_rate = int(audio_stream.get("sample_rate", 0) or 0)
+    if sample_rate and sample_rate < MIN_SAMPLE_RATE_HZ:
+        failures.append(
+            f"sample rate {sample_rate}Hz is below the {MIN_SAMPLE_RATE_HZ}Hz minimum"
+        )
+
+    duration = float(audio_stream.get("duration", 0.0) or 0.0)
+    if duration <= 0:
+        failures.append("audio has zero/invalid duration")
+    elif duration > max_duration_seconds:
+        failures.append(
+            f"audio duration {duration:.2f}s exceeds the {max_duration_seconds}s cap"
+        )
+
+    mean_volume = _measure_mean_volume_db(audio_bytes, suffix=suffix)
+    if mean_volume is not None and mean_volume <= SILENCE_MEAN_VOLUME_DB_THRESHOLD:
+        failures.append(
+            f"audio is effectively silent (mean volume {mean_volume:.1f}dB, "
+            f"threshold {SILENCE_MEAN_VOLUME_DB_THRESHOLD}dB)"
+        )
+
+    return len(failures) == 0, failures
