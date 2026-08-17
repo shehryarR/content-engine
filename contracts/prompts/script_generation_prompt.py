@@ -52,5 +52,8 @@ Return exactly this structure:
 """
 
 
-def build_script_prompt(topic: str) -> str:
-    return f"Write a 3-scene avatar video script about: {topic}. Keep it brief — total narration under 550 characters across all 3 scenes combined."
+def build_script_prompt(topic: str, feedback: str | None = None) -> str:
+    base = f"Write a 3-scene avatar video script about: {topic}. Keep it brief — total narration under 550 characters across all 3 scenes combined."
+    if feedback:
+        base += f"\n\nYour previous attempt failed validation: {feedback}. Fix this specific issue in your next response."
+    return base
