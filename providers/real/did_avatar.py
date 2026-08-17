@@ -326,3 +326,88 @@ class DIDAvatarProvider(StageProvider):
             },
             artifact_refs=[artifact],
         )
+
+# --- S30 exit validator logic. Wrapped as a StageValidator and registered
+# in orchestrator/stage_executor.py (STAGE_VALIDATORS["S30"]). ---
+#
+# IMPORTANT SCOPE NOTE (M3 Day 1 Part 1 / Part 2 decision): identity-
+# similarity scoring is NOT implemented here. identity_threshold_v1.json
+# doesn't exist yet (flagged since M2, still unresolved), and building a
+# real face-embedding-similarity check is a separate, heavier task than
+# this validator. Per the M3 Day 1 doc's explicit allowance, this ships
+# as a placeholder pass-through for identity: it validates that the
+# output is a genuinely valid, non-corrupt video of plausible duration,
+# but it CANNOT yet detect "right video, wrong face" - only "broken
+# video" or "video of the wrong length". Revisit once threshold
+# calibration lands.
+
+import os
+import subprocess
+import tempfile
+
+DURATION_TOLERANCE_SECONDS = 2.0
+
+
+def _probe_video_streams(video_bytes: bytes) -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(video_bytes)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", tmp_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        data = json.loads(result.stdout)
+        return data.get("streams", [])
+    except Exception:
+        return []
+    finally:
+        os.unlink(tmp_path)
+
+
+def validate_avatar_render(
+    video_bytes: bytes,
+    expected_audio_duration: float | None = None,
+    tolerance: float = DURATION_TOLERANCE_SECONDS,
+) -> tuple[bool, list[str]]:
+    """
+    Checks: video file is genuinely valid and non-corrupt (has a real
+    video stream), and its duration falls within tolerance of S20's
+    audio duration when that's known. Returns (passed, failures).
+
+    Does NOT check identity similarity - see module-level note above.
+    """
+    failures: list[str] = []
+
+    if not video_bytes:
+        return False, ["avatar render is empty (failed generation)"]
+
+    streams = _probe_video_streams(video_bytes)
+    if not streams:
+        return False, ["avatar render could not be probed - file is corrupt or unreadable"]
+
+    video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if video_stream is None:
+        failures.append("no video stream present in avatar render")
+
+    duration = 0.0
+    for s in streams:
+        if s.get("codec_type") == "video" and s.get("duration"):
+            try:
+                duration = float(s["duration"])
+                break
+            except (TypeError, ValueError):
+                continue
+
+    if duration <= 0:
+        failures.append("avatar render has zero/invalid duration")
+    elif expected_audio_duration is not None and expected_audio_duration > 0:
+        diff = abs(duration - expected_audio_duration)
+        if diff > tolerance:
+            failures.append(
+                f"avatar render duration {duration:.2f}s differs from expected "
+                f"audio duration {expected_audio_duration:.2f}s by {diff:.2f}s "
+                f"(tolerance {tolerance}s)"
+            )
+
+    return len(failures) == 0, failures

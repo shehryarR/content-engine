@@ -11,16 +11,21 @@ from providers.stub.stub_disclosure import StubDisclosureProvider
 from providers.stub.stub_publish import StubPublishProvider
 from providers.real.openai_whisper_captions import OpenAIWhisperCaptionsProvider
 from providers.real.gemini_script import GeminiScriptProvider
-from providers.real.openai_script  import OpenAIScriptProvider
+from providers.real.openai_script import OpenAIScriptProvider
 from providers.real.did_avatar import DIDAvatarProvider
 from providers.real.elevenlabs_voice import ElevenLabsVoiceProvider
 from orchestrator.provider_config import load_provider_config
 
-_providers: dict[str,StageProvider] ={}
+_providers: dict[str, StageProvider] = {}
+_SCRIPT_GENERATION_PROVIDERS = {
+    "openai": OpenAIScriptProvider,
+    "gemini": GeminiScriptProvider,
+}
+_DEFAULT_SCRIPT_GENERATION_PROVIDER = "openai"
 
 
-def register(provider:StageProvider)->None:
-    _providers[provider.capability]=provider
+def register(provider: StageProvider) -> None:
+    _providers[provider.capability] = provider
 
 
 def get(capability: str) -> StageProvider:
@@ -36,8 +41,8 @@ def clear() -> None:
     """Remove all registrations. Useful for testing."""
     _providers.clear()
 
+
 def register_all_stubs() -> None:
-    
     register(StubIntakeProvider())
     register(StubScriptProvider())
     register(StubVoiceProvider())
@@ -49,48 +54,60 @@ def register_all_stubs() -> None:
     register(StubDisclosureProvider())
     register(StubPublishProvider())
 
+
 def try_register_real_providers() -> list[str]:
     """
     Attempt to register real providers where API keys are configured.
     Returns list of capabilities that registered real providers.
     """
     real = []
+
     try:
-        
-        cfg = load_provider_config('script_generation')
-        if cfg.get('api_key'):
-            
-            
-            register(OpenAIScriptProvider())
-            real.append('script_generation')
-            print("script_generation stub overwritten")
+        cfg = load_provider_config("script_generation")
+        provider_name = None
+        provider_cls = None
+
+        if cfg.get("api_key"):
+            provider_name = (cfg.get("provider") or _DEFAULT_SCRIPT_GENERATION_PROVIDER).lower()
+            provider_cls = _SCRIPT_GENERATION_PROVIDERS.get(provider_name)
+
+            if provider_cls is None:
+                raise ValueError(
+                    f"Unknown script_generation provider '{provider_name}'. "
+                    f"Valid options: {list(_SCRIPT_GENERATION_PROVIDERS)}"
+                )
+
+            register(provider_cls())
+            real.append("script_generation")
+            print(f"script_generation stub overwritten with {provider_name}")
     except Exception as e:
-        print(f'[registry] script_generation real provider unavailable: {e}')
+        print(f"[registry] script_generation real provider unavailable: {e}")
+
     try:
-        cfg = load_provider_config('voice_synthesis')
-        if cfg.get('api_key'):
-            
+        cfg = load_provider_config("voice_synthesis")
+        if cfg.get("api_key"):
             register(ElevenLabsVoiceProvider())
-            real.append('voice_synthesis')
+            real.append("voice_synthesis")
             print("voice_synthesis stub overwritten")
     except Exception as e:
-    
-        print(f'[registry] voice_synthesis real provider unavailable: {e}')
-    try :
-        cfg = load_provider_config('avatar_render')
-        if cfg.get('api_key'):
+        print(f"[registry] voice_synthesis real provider unavailable: {e}")
+
+    try:
+        cfg = load_provider_config("avatar_render")
+        if cfg.get("api_key"):
             register(DIDAvatarProvider())
-            real.append('avatar_render')
+            real.append("avatar_render")
             print("S30 AND S40 overwritten")
     except Exception as e:
-        print(f'[registry] avatar_render real provider unavailable : {e}')
-    try:
-        cfg = load_provider_config('caption_generation')
-        if cfg.get('api_key') or cfg.get('model_size'):
+        print(f"[registry] avatar_render real provider unavailable : {e}")
 
+    try:
+        cfg = load_provider_config("caption_generation")
+        if cfg.get("api_key") or cfg.get("model_size"):
             register(OpenAIWhisperCaptionsProvider())
-            real.append('caption_generation')
+            real.append("caption_generation")
             print("captions stub overwritten")
     except Exception as e:
-        print(f'[registry] caption_generation real provider unavailable: {e}')
+        print(f"[registry] caption_generation real provider unavailable: {e}")
+
     return real

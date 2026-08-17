@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 _KNOWN_KEYS: dict[str, list[str]] = {
-    "script_generation": ["api_key", "model_id"],
+    "script_generation": ["api_key", "model_id", "provider"],
     "voice_synthesis": ["api_key", "model_id", "voice_id_override"],
     "avatar_render": ["api_key", "presenter_id", "base_url"],
     "caption_generation": ["api_key", "model_size", "device"],

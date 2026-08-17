@@ -46,6 +46,10 @@ RETRYABLE_VALIDATION_FAILURE_TYPES = {
     "caption_timing_invalid",
     # S70 QC re-checks the same S60 video - retrying re-validates nothing
     # new, so NOT included.
+    "malformed_script",
+    "voice_invalid",
+    "avatar_render_invalid",
+    "sync_duration_mismatch",
 }
 
 
@@ -85,6 +89,7 @@ async def _run_stage_with_correction(
     run_id: str,
     artifact_refs: list[dict],
     validation_ref: dict | None,
+    identity_id: str | None = None,
 ) -> dict:
     """
     Run one stage via the generic run_stage Activity, retrying that same
@@ -92,14 +97,24 @@ async def _run_stage_with_correction(
     when the activity fails with a ValidationFailureV1. Any other activity
     failure (timeouts, worker crashes, non-validation errors) is re-raised
     and left to Temporal's own retry policy / workflow failure handling.
+
+    S30-specific retry semantics (M3 Day 1 Part 4): an avatar_render
+    failure most likely means the wrong reference_asset was fetched from
+    the registry, not that D-ID "got it wrong". So on a retryable S30
+    failure, re-fetch the identity reference from identity_profiles via
+    fetch_identity_reference fresh before re-calling D-ID, instead of
+    blindly resubmitting the same (possibly still-wrong) artifact_refs.
+    Every other stage keeps re-submitting the same artifact_refs across
+    attempts, unchanged.
     """
     attempt = 1
+    current_artifact_refs = artifact_refs
     while True:
         envelope_dict = _build_envelope(
             stage_id,
             capability,
             run_id,
-            artifact_refs=artifact_refs,
+            artifact_refs=current_artifact_refs,
             attempt=attempt,
             validation_ref=validation_ref,
         )
@@ -124,11 +139,29 @@ async def _run_stage_with_correction(
             )
             if not plan.retryable:
                 raise
-            workflow.logger.warning(
-                f"Stage {stage_id} attempt {attempt} failed validation "
-                f"({failure.failure_type}): {failure.message}. Retrying "
-                f"(budget {plan.retry_budget})."
-            )
+
+            if stage_id == "S30" and identity_id:
+                workflow.logger.warning(
+                    f"Stage S30 attempt {attempt} failed ({failure.failure_type}): "
+                    f"{failure.message}. Re-fetching identity reference "
+                    f"{identity_id} from the registry before retrying, rather "
+                    f"than resubmitting the same reference."
+                )
+                fresh_identity_ref = await workflow.execute_activity(
+                    "fetch_identity_reference",
+                    args=[identity_id],
+                    start_to_close_timeout=STAGE_TIMEOUT,
+                )
+                current_artifact_refs = [
+                    ref for ref in current_artifact_refs
+                    if not str(ref.get("artifact_id", "")).startswith("identity_ref_")
+                ] + [fresh_identity_ref]
+            else:
+                workflow.logger.warning(
+                    f"Stage {stage_id} attempt {attempt} failed validation "
+                    f"({failure.failure_type}): {failure.message}. Retrying "
+                    f"(budget {plan.retry_budget})."
+                )
             attempt += 1
 
 
@@ -216,6 +249,7 @@ class AvatarPipeline:
                 run_id,
                 prior_artifact_refs,
                 last_validation_ref,
+                identity_id=idea.get("identity_id"),
             )
             last_validation_ref = output_dict.pop("_validation_ref", None)
             self._stage_outputs[stage_id] = output_dict

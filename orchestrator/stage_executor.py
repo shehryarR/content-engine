@@ -35,6 +35,15 @@ from orchestrator.telemetry import record_telemetry
 # verified artifacts instead of re-invoking the provider.
 _stage_result_cache: dict[str, tuple[StageOutputV1, ArtifactRefV1]] = {}
 
+# In-memory cache of validation failures/feedback context to thread context
+# on retry without altering StageEnvelopeV1 or pipeline.py contracts.
+_stage_feedback_cache: dict[str, str] = {}
+
+
+def get_stage_feedback(run_id: str, stage_id: str) -> str | None:
+    """Retrieve feedback context for a retried stage execution."""
+    return _stage_feedback_cache.get(f"{run_id}_{stage_id}")
+
 
 def _compute_cache_key(envelope: StageEnvelopeV1) -> str:
     key_material = {
@@ -82,37 +91,111 @@ def _verify_artifact_hashes(
     )
 
 
-# Per-stage validator registration. Every stage in STAGE_SEQUENCE gets a
-# slot here; today they all resolve to the generic hash-check. Stage-
-# specific validation logic (beyond hash verification) plugs in by
-# overriding a stage's entry, not by changing execute_stage.
-#
-# A custom validator receives the stage's output, the stage_id, and the
-# full envelope (so it can inspect envelope.artifact_refs - e.g. to find
-# the upstream audio artifact by mime_type - or envelope.provider). Note
-# envelope.artifact_refs only carries ArtifactRefV1s (id/path/hash/mime_type)
-# accumulated from prior stages' outputs, not their full payloads, so a
-# field like S20's duration_seconds is NOT available on the envelope
-# directly - pipeline.py only forwards artifact_refs between stages, not
-# payload. A validator that needs duration has to fetch the audio artifact
-# itself and derive it (e.g. via ffprobe), the same way stub_assembly.py's
-# duration measurement already does.
-#
-# A failing validator should set ValidationReportV1.failure_type to its own
-# machine-readable category (e.g. "duration_mismatch") rather than leaving
-# it None. execute_stage falls back to a generic label when a validator
-# doesn't set one, but that fallback is deliberately NOT "hash_mismatch" -
-# a validator's failure shouldn't be mislabeled as a hash failure just
-# because none was given. Downstream, pipeline.py's
-# RETRYABLE_VALIDATION_FAILURE_TYPES only treats known types as
-# locally-retryable, so a new failure_type needs to be added there
-# explicitly for the correction loop to retry on it.
+def _validate_s10_script(
+    output: StageOutputV1,
+    stage_id: str,
+    envelope: StageEnvelopeV1,
+) -> ValidationReportV1:
+    """
+    Deterministic exit validator for S10 script generation.
+
+    Enforces the script constraints required by the S10 prompt:
+    - scenes must be present
+    - exactly 3 scenes
+    - every scene must be a non-empty string
+    - combined scene length must never exceed the 1500-character hard cap
+    """
+    failures: list[str] = []
+
+    payload = output.payload
+
+    if not isinstance(payload, dict):
+        failures.append("S10 output payload must be a JSON object.")
+        return ValidationReportV1(
+            passed=False,
+            failures=failures,
+            stage_id=stage_id,
+            failure_type="malformed_script",
+        )
+
+    if set(payload.keys()) != {"run_id", "scenes"}:
+        failures.append(
+            "S10 output must contain exactly the 'run_id' and 'scenes' fields."
+        )
+
+    scenes = payload.get("scenes")
+
+    if not isinstance(scenes, list):
+        failures.append("S10 'scenes' must be a list.")
+    else:
+        if len(scenes) != 3:
+            failures.append(
+                f"S10 script must contain exactly 3 scenes; got {len(scenes)}."
+            )
+
+        for index, scene in enumerate(scenes, start=1):
+            if not isinstance(scene, str):
+                failures.append(
+                    f"S10 scene {index} must be a string."
+                )
+            elif not scene.strip():
+                failures.append(
+                    f"S10 scene {index} must be non-empty."
+                )
+
+        if all(isinstance(scene, str) for scene in scenes):
+            combined_length = sum(len(scene) for scene in scenes)
+
+            if combined_length > 1500:
+                failures.append(f"S10 combined scene length is {combined_length} characters; hard cap is 1500.")
+
+    return ValidationReportV1(
+        passed=len(failures) == 0,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type="malformed_script" if failures else None,
+    )
+
+
+def _validate_s10(
+    output: StageOutputV1,
+    stage_id: str,
+    envelope: StageEnvelopeV1,
+) -> ValidationReportV1:
+    hash_report = _verify_artifact_hashes(output, stage_id, envelope)
+    script_report = _validate_s10_script(output, stage_id, envelope)
+
+    failures = hash_report.failures + script_report.failures
+
+    if not failures:
+        return ValidationReportV1(
+            passed=True,
+            failures=[],
+            stage_id=stage_id,
+            failure_type=None,
+        )
+
+    failure_type = (
+        "malformed_script"
+        if script_report.failures
+        else hash_report.failure_type
+    )
+
+    return ValidationReportV1(
+        passed=False,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=failure_type,
+    )
+
+
 StageValidator = Callable[[StageOutputV1, str, StageEnvelopeV1], ValidationReportV1]
 
 STAGE_VALIDATORS: dict[str, StageValidator] = {
     stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
 }
 
+STAGE_VALIDATORS["S10"] = _validate_s10
 
 def execute_stage(
     run_id: str,
@@ -154,6 +237,8 @@ def execute_stage(
                 message=f"Stage {envelope.stage_id} failed validation ({failure_type}): {validation_report.failures}",
                 feedback_context="; ".join(validation_report.failures),
             )
+            # Cache feedback context for retry
+            _stage_feedback_cache[f"{run_id}_{envelope.stage_id}"] = failure.feedback_context or ""
             # non_retryable: Temporal's own retry policy would just replay
             # this exact envelope; the correction retry (if any) belongs to
             # pipeline.py, which re-invokes this stage with attempt += 1.
@@ -163,6 +248,9 @@ def execute_stage(
                 type="ValidationFailure",
                 non_retryable=True,
             )
+
+        # Clear feedback context on success
+        _stage_feedback_cache.pop(f"{run_id}_{envelope.stage_id}", None)
 
         report_bytes = validation_report.model_dump_json().encode("utf-8")
         validation_ref = put_artifact(
@@ -200,6 +288,101 @@ def execute_stage(
     record_telemetry(telemetry_record)
 
     return output, validation_ref
+# --- Owner C (S20) validator wrapper ---
+
+from providers.real.elevenlabs_voice import validate_voice
+
+
+def _validate_voice_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no audio artifact produced"],
+            stage_id=stage_id,
+            failure_type="voice_invalid",
+        )
+    audio_ref = output.artifact_refs[0]
+    audio_bytes = get_artifact(audio_ref)
+
+    passed, failures = validate_voice(audio_bytes, mime_type=audio_ref.mime_type)
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "voice_invalid",
+    )
+
+
+STAGE_VALIDATORS["S20"] = _validate_voice_stage
+
+
+# --- Owner D (S30/S40) validator wrappers ---
+#
+# See providers/real/did_avatar.py's module-level note: identity-similarity
+# scoring is NOT implemented (blocked on identity_threshold_v1.json, which
+# doesn't exist yet). These validators check video validity and duration
+# alignment only - they cannot yet distinguish "right video, wrong face"
+# from "correct render". Both failure_types below (avatar_render_invalid,
+# sync_duration_mismatch) are placeholders for that broader gap.
+
+from providers.real.did_avatar import validate_avatar_render
+from providers.stub.stub_sync import validate_sync
+
+
+def _validate_avatar_render_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no avatar render artifact produced"],
+            stage_id=stage_id,
+            failure_type="avatar_render_invalid",
+        )
+    video_bytes = get_artifact(output.artifact_refs[0])
+    audio_duration = _get_upstream_audio_duration(envelope)
+
+    passed, failures = validate_avatar_render(
+        video_bytes,
+        expected_audio_duration=audio_duration if audio_duration > 0 else None,
+    )
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "avatar_render_invalid",
+    )
+
+
+def _validate_sync_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no sync artifact produced"],
+            stage_id=stage_id,
+            failure_type="sync_duration_mismatch",
+        )
+    video_bytes = get_artifact(output.artifact_refs[0])
+    audio_duration = _get_upstream_audio_duration(envelope)
+
+    passed, failures = validate_sync(
+        video_bytes,
+        expected_audio_duration=audio_duration if audio_duration > 0 else None,
+    )
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "sync_duration_mismatch",
+    )
+
+
+STAGE_VALIDATORS["S30"] = _validate_avatar_render_stage
+STAGE_VALIDATORS["S40"] = _validate_sync_stage
 
 # --- Owner E (S50/S60/S70) validator wrappers ---
 # Each wraps the stage's own validate_*() logic (living in the provider
@@ -259,16 +442,26 @@ def _validate_assembly_stage(
         )
     video_bytes = get_artifact(output.artifact_refs[0])
     audio_duration = _get_upstream_audio_duration(envelope)
+    
+
 
     passed, failures = validate_assembly(
         video_bytes,
         expected_audio_duration=audio_duration if audio_duration > 0 else None,
     )
+    failure_type= None
+    if not passed:
+        failure_type = (
+            "assembly_duration_mismatch"
+            if any("duration" in f for f in failures)
+            else "assembly_failed"
+        )
+
     return ValidationReportV1(
         passed=passed,
         failures=failures,
         stage_id=stage_id,
-        failure_type=None if passed else "assembly_duration_mismatch",
+        failure_type=failure_type,
     )
 
 

@@ -79,10 +79,8 @@ class OpenAIWhisperCaptionsProvider:
             },
             artifact_refs=[artifact],
         )
-
-
-# --- S50 exit validator (standalone until Ammar's ValidationFailureV1/
-# correction-loop wiring lands — Parts 5/6 blocked on that, see M3 Day 1 doc) ---
+# --- S50 exit validator logic. Wrapped as a StageValidator and registered
+# in orchestrator/stage_executor.py (STAGE_VALIDATORS["S50"]). ---
 
 MIN_WORDS_PER_SECOND = 0.3
 MAX_WORDS_PER_SECOND = 6.0
