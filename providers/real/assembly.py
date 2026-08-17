@@ -227,9 +227,8 @@ class AssemblyProvider:
             artifact_refs=[artifact],
         )
 
-
-# --- S60 exit validator (standalone until Ammar's ValidationFailureV1/
-# correction-loop wiring lands — Parts 5/6 blocked on that, see M3 Day 1 doc) ---
+# --- S60 exit validator logic. Wrapped as a StageValidator and registered
+# in orchestrator/stage_executor.py (STAGE_VALIDATORS["S60"]). ----
 
 def _has_video_stream(video_bytes: bytes) -> bool:
     """Return True if the video bytes contain a video stream."""

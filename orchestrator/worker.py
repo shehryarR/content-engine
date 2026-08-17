@@ -1,8 +1,8 @@
 """
 orchestrator/worker.py
 
-The worker process. Registers both the hello-world workflow (stack health check)
-and the real AvatarPipeline workflow.
+The worker process. Registers stub and (where configured) real providers,
+then runs the AvatarPipeline workflow.
 """
 from dotenv import load_dotenv
 load_dotenv()
