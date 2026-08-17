@@ -79,3 +79,48 @@ class OpenAIWhisperCaptionsProvider:
             },
             artifact_refs=[artifact],
         )
+
+
+# --- S50 exit validator (standalone until Ammar's ValidationFailureV1/
+# correction-loop wiring lands — Parts 5/6 blocked on that, see M3 Day 1 doc) ---
+
+MIN_WORDS_PER_SECOND = 0.3
+MAX_WORDS_PER_SECOND = 6.0
+OVERLAP_TOLERANCE_SECONDS = 0.05
+
+
+def validate_captions(captions_data: dict, audio_duration: float) -> tuple[bool, list[str]]:
+    """Checks: well-formed non-overlapping word timing, plausible word count
+    given audio duration. Returns (passed, failure_reasons)."""
+    failures: list[str] = []
+    words = captions_data.get("words", [])
+
+    if not words:
+        return False, ["no words found in captions data"]
+
+    for w in words:
+        start, end = w.get("start"), w.get("end")
+        if start is None or end is None:
+            failures.append(f"word {w.get('text')!r} missing start/end")
+        elif end <= start:
+            failures.append(f"word {w.get('text')!r} has end<=start ({start}-{end})")
+
+    for i in range(len(words) - 1):
+        cur, nxt = words[i], words[i + 1]
+        if cur.get("end") is not None and nxt.get("start") is not None:
+            if cur["end"] > nxt["start"] + OVERLAP_TOLERANCE_SECONDS:
+                failures.append(
+                    f"overlap: word {i} ({cur.get('text')!r}) ends {cur['end']}, "
+                    f"word {i+1} ({nxt.get('text')!r}) starts {nxt['start']}"
+                )
+
+    if audio_duration > 0:
+        rate = len(words) / audio_duration
+        if not (MIN_WORDS_PER_SECOND <= rate <= MAX_WORDS_PER_SECOND):
+            failures.append(
+                f"word rate {rate:.2f} words/sec outside plausible range "
+                f"[{MIN_WORDS_PER_SECOND},{MAX_WORDS_PER_SECOND}] "
+                f"({len(words)} words over {audio_duration:.2f}s)"
+            )
+
+    return len(failures) == 0, failures

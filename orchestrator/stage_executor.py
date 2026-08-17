@@ -312,3 +312,96 @@ def execute_stage(
     record_telemetry(telemetry_record)
 
     return output, validation_ref
+
+# --- Owner E (S50/S60/S70) validator wrappers ---
+# Each wraps the stage's own validate_*() logic (living in the provider
+# file, per the M3 Day 1 doc's "Where" guidance) to match StageValidator's
+# 3-arg signature, then gets registered into STAGE_VALIDATORS below.
+
+from providers.real.openai_whisper_captions import validate_captions
+from providers.real.assembly import validate_assembly, _measure_duration
+
+
+def _get_upstream_audio_duration(envelope: StageEnvelopeV1) -> float:
+    """Fetch the upstream S20 audio artifact (if present in
+    envelope.artifact_refs) and measure its duration via ffprobe."""
+    audio_ref = next(
+        (r for r in envelope.artifact_refs
+         if r.mime_type and r.mime_type.startswith("audio/")),
+        None,
+    )
+    if audio_ref is None:
+        return 0.0
+    audio_bytes = get_artifact(audio_ref)
+    return _measure_duration(audio_bytes)
+
+
+def _validate_captions_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no caption artifact produced"],
+            stage_id=stage_id,
+            failure_type="caption_timing_invalid",
+        )
+    caption_bytes = get_artifact(output.artifact_refs[0])
+    captions_data = json.loads(caption_bytes)
+    audio_duration = _get_upstream_audio_duration(envelope)
+
+    passed, failures = validate_captions(captions_data, audio_duration)
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "caption_timing_invalid",
+    )
+
+
+def _validate_assembly_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    if not output.artifact_refs:
+        return ValidationReportV1(
+            passed=False,
+            failures=["no video artifact produced (failed encode)"],
+            stage_id=stage_id,
+            failure_type="assembly_failed",
+        )
+    video_bytes = get_artifact(output.artifact_refs[0])
+    audio_duration = _get_upstream_audio_duration(envelope)
+
+    passed, failures = validate_assembly(
+        video_bytes,
+        expected_audio_duration=audio_duration if audio_duration > 0 else None,
+    )
+    return ValidationReportV1(
+        passed=passed,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if passed else "assembly_duration_mismatch",
+    )
+
+
+def _validate_qc_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """S70 QC already computes its own pass/fail (stub_qc.py's Layer 1/4
+    checks) — this wrapper just surfaces that result into the shared
+    ValidationReportV1/correction-loop flow rather than re-deriving it."""
+    qc_passed = bool(output.metadata.get("passed", False))
+    metrics = output.payload.get("metrics", {}) if isinstance(output.payload, dict) else {}
+    failed_checks = [k for k, v in metrics.items() if isinstance(v, float) and v == 0.0]
+
+    return ValidationReportV1(
+        passed=qc_passed,
+        failures=failed_checks if failed_checks else (["QC failed"] if not qc_passed else []),
+        stage_id=stage_id,
+        failure_type=None if qc_passed else "qc_failed",
+    )
+
+
+STAGE_VALIDATORS["S50"] = _validate_captions_stage
+STAGE_VALIDATORS["S60"] = _validate_assembly_stage
+STAGE_VALIDATORS["S70"] = _validate_qc_stage
