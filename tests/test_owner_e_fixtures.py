@@ -83,3 +83,58 @@ def test_failed_encode_fixture_fails_and_is_retryable():
     assert report.failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES, (
         "assembly failures must be retryable per M3 Day 1 Part 5 decision"
     )
+
+
+def test_disclosure_false_synthetic_flag_fails():
+    """G90: an avatar-modality disclosure decision with
+    contains_synthetic_media=False must fail validation."""
+    from contracts.stages.g90_disclosure import DisclosureDecisionV1
+    from orchestrator.stage_executor import _validate_disclosure_stage
+
+    bad_disclosure = DisclosureDecisionV1(
+        modality="avatar",
+        master_video_hash="a" * 64,
+        contains_synthetic_media=False,  # violates the M0/M1 rule
+        policy_basis="policy_stub_g90",
+    )
+    output = StageOutputV1(
+        payload=bad_disclosure.model_dump(mode="json"),
+        metadata={},
+        artifact_refs=[],
+    )
+    envelope = _make_envelope("G90", "disclosure_check", artifact_refs=[])
+
+    report = _validate_disclosure_stage(output, "G90", envelope)
+
+    assert report.passed is False
+    assert report.failure_type == "disclosure_synthetic_flag_false"
+    assert report.failure_type not in RETRYABLE_VALIDATION_FAILURE_TYPES, (
+        "a synthetic-flag violation is a policy issue, not something a "
+        "blind retry fixes - must not be retryable"
+    )
+
+
+def test_publish_public_privacy_fails():
+    """S100: privacy='public' must fail validation, regardless of
+    upstream disclosure state."""
+    from contracts.stages.s100_publish import PublishReceiptV1
+    from orchestrator.stage_executor import _validate_publish_stage
+
+    bad_receipt = PublishReceiptV1(
+        run_id="test_run_s100",
+        platform_video_id=None,
+        privacy="public",  # never allowed
+        dry_run=True,
+    )
+    output = StageOutputV1(
+        payload=bad_receipt.model_dump(mode="json"),
+        metadata={},
+        artifact_refs=[],
+    )
+    envelope = _make_envelope("S100", "publish", artifact_refs=[])
+
+    report = _validate_publish_stage(output, "S100", envelope)
+
+    assert report.passed is False
+    assert report.failure_type == "publish_privacy_violation"
+    assert report.failure_type not in RETRYABLE_VALIDATION_FAILURE_TYPES
