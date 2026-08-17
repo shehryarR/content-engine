@@ -1,4 +1,48 @@
 {
+  "$defs": {
+    "ArtifactRefV1": {
+      "additionalProperties": false,
+      "description": "A reference to a stored artifact \u2014 never the raw bytes themselves.\n\nStages pass around pointers (path + hash + mime type). The actual file\nlives in the object store (S3-compatible); the manifest / envelope only\never stores the reference.",
+      "properties": {
+        "artifact_id": {
+          "description": "Unique ID for this artifact.",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "path": {
+          "description": "Content-addressed storage path/key for the artifact, e.g. 's3://bucket/artifacts/<sha256>.mp4'. Must not be a mutable alias such as 'latest.mp4'.",
+          "title": "Path",
+          "type": "string"
+        },
+        "hash": {
+          "description": "SHA-256 hex digest of the artifact contents.",
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Hash",
+          "type": "string"
+        },
+        "mime_type": {
+          "description": "MIME type of the stored artifact, e.g. 'video/mp4', 'audio/wav', 'application/json'.",
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "created_at": {
+          "description": "UTC timestamp when this artifact reference was created.",
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "path",
+        "hash",
+        "mime_type"
+      ],
+      "title": "ArtifactRefV1",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "description": "Records why a stage's output failed validation.",
   "properties": {
@@ -8,7 +52,7 @@
       "type": "string"
     },
     "failure_type": {
-      "description": "Machine-readable failure category, e.g. 'hash_mismatch'.",
+      "description": "Machine-readable failure category, e.g. 'hash_mismatch'. This is the failure_code the M3 roadmap refers to - kept as failure_type since that name is already threaded through ValidationReportV1, RETRYABLE_VALIDATION_FAILURE_TYPES, and every stage validator; renaming it would be a larger, purely cosmetic change touching every validator for no behavioral gain.",
       "title": "Failure Type",
       "type": "string"
     },
@@ -35,6 +79,50 @@
       "format": "date-time",
       "title": "Failed At",
       "type": "string"
+    },
+    "failed_field": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Which specific field/check failed, e.g. 'scenes[1]' or 'duration'. None when the failure isn't localized to one field (e.g. a corrupt/unreadable file).",
+      "title": "Failed Field"
+    },
+    "evidence_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRefV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pointer to the stored ValidationReportV1 (or offending artifact) backing this failure - makes the failure inspectable later instead of living only in a log line."
+    },
+    "retryable": {
+      "default": false,
+      "description": "Whether this failure_type is in RETRYABLE_VALIDATION_FAILURE_TYPES at the time this record was raised. Duplicated onto the record itself (rather than only computed later in pipeline.py) so a failure is self-describing without cross-referencing pipeline.py's set.",
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "suggested_fix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Short, validator-authored hint for a human reading a failed run later. Distinct from feedback_context, which is prose meant to go back into a retried LLM prompt, not for a person.",
+      "title": "Suggested Fix"
     }
   },
   "required": [

@@ -27,6 +27,7 @@ from orchestrator.manifest_store import save_stage_record
 from orchestrator.registry import get as get_provider
 from orchestrator.storage import get_artifact, put_artifact
 from orchestrator.telemetry import record_telemetry
+from orchestrator.pipeline import RETRYABLE_VALIDATION_FAILURE_TYPES
 
 # In-memory, process-lifetime cache of verified stage results, keyed by
 # canonical input (envelope.input_hash + provider descriptor + upstream
@@ -231,14 +232,52 @@ def execute_stage(
 
         if not validation_report.passed:
             failure_type = validation_report.failure_type or "unspecified_validation_failure"
+
+            # Store the failing report as evidence - previously this was
+            # only ever stored on the success path a few lines below, so a
+            # failed attempt's report was never persisted anywhere.
+            failed_report_bytes = validation_report.model_dump_json().encode("utf-8")
+            evidence_ref = put_artifact(
+                data=failed_report_bytes,
+                artifact_id=f"validation_{envelope.stage_id}_attempt{envelope.attempt}_FAILED",
+                mime_type="application/json",
+            )
+
             failure = ValidationFailureV1(
                 stage_id=envelope.stage_id,
                 failure_type=failure_type,
                 message=f"Stage {envelope.stage_id} failed validation ({failure_type}): {validation_report.failures}",
                 feedback_context="; ".join(validation_report.failures),
+                evidence_ref=evidence_ref,
+                retryable=failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES,
             )
             # Cache feedback context for retry
             _stage_feedback_cache[f"{run_id}_{envelope.stage_id}"] = failure.feedback_context or ""
+
+            # Log the failed attempt itself - previously nothing was
+            # written here at all, so a stage that failed twice before
+            # succeeding on attempt 3 only ever showed attempt 3 in the
+            # manifest/telemetry tables. Attempts 1 and 2 were invisible.
+            failed_at = datetime.now(timezone.utc)
+            save_stage_record(run_id, idea_request_id, StageRecordV1(
+                stage_id=envelope.stage_id,
+                status=StageStatus.FAILED,
+                attempt=envelope.attempt,
+                started_at=started_at,
+                completed_at=failed_at,
+                output_artifact_ids=[],
+            ))
+            record_telemetry(StageRunRecordV1(
+                run_id=run_id,
+                stage_id=envelope.stage_id,
+                attempt=envelope.attempt,
+                input_hash=envelope.input_hash,
+                output_hash=None,
+                provider=envelope.provider,
+                started_at=started_at,
+                ended_at=failed_at,
+            ))
+
             # non_retryable: Temporal's own retry policy would just replay
             # this exact envelope; the correction retry (if any) belongs to
             # pipeline.py, which re-invokes this stage with attempt += 1.
@@ -443,7 +482,6 @@ def _validate_assembly_stage(
     video_bytes = get_artifact(output.artifact_refs[0])
     audio_duration = _get_upstream_audio_duration(envelope)
     
-
 
     passed, failures = validate_assembly(
         video_bytes,

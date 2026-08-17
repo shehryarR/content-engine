@@ -116,7 +116,7 @@ async def _run_stage_with_correction(
                 raise
             failure = ValidationFailureV1.model_validate(cause.details[0])
             plan = CorrectionPlanV1(
-                stage_id=stage_id,
+                target_stage=stage_id,
                 retryable=(
                     failure.failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES
                     and attempt < DEFAULT_RETRY_BUDGET
