@@ -11,15 +11,6 @@ import asyncio
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-
-
-
-from orchestrator.pipeline import AvatarPipeline
-from orchestrator.activities import run_stage
-
-
-from orchestrator.registry import register
-
 from orchestrator.activities import run_stage, record_g80_approval,run_intake_stage
 from orchestrator.pipeline import AvatarPipeline, TASK_QUEUE
 from orchestrator.registry import register_all_stubs, try_register_real_providers

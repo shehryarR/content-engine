@@ -371,16 +371,26 @@ def _validate_assembly_stage(
         )
     video_bytes = get_artifact(output.artifact_refs[0])
     audio_duration = _get_upstream_audio_duration(envelope)
+    
+
 
     passed, failures = validate_assembly(
         video_bytes,
         expected_audio_duration=audio_duration if audio_duration > 0 else None,
     )
+    failure_type= None
+    if not passed:
+        failure_type = (
+            "assembly_duration_mismatch"
+            if any("duration" in f for f in failures)
+            else "assembly_failed"
+        )
+
     return ValidationReportV1(
         passed=passed,
         failures=failures,
         stage_id=stage_id,
-        failure_type=None if passed else "assembly_duration_mismatch",
+        failure_type=failure_type,
     )
 
 
