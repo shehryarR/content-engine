@@ -19,6 +19,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from contracts.common.envelope import ArtifactRefV1
+
 
 class ValidationFailureV1(BaseModel):
     """
@@ -30,7 +32,12 @@ class ValidationFailureV1(BaseModel):
     )
     failure_type: str = Field(
         ...,
-        description="Machine-readable failure category, e.g. 'hash_mismatch'.",
+        description="Machine-readable failure category, e.g. 'hash_mismatch'. "
+        "This is the failure_code the M3 roadmap refers to - kept as "
+        "failure_type since that name is already threaded through "
+        "ValidationReportV1, RETRYABLE_VALIDATION_FAILURE_TYPES, and every "
+        "stage validator; renaming it would be a larger, purely cosmetic "
+        "change touching every validator for no behavioral gain.",
     )
     message: str = Field(
         ..., description="Human-readable description of the failure."
@@ -44,6 +51,32 @@ class ValidationFailureV1(BaseModel):
     failed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC timestamp when this validation failure was recorded.",
+    )
+    failed_field: Optional[str] = Field(
+        default=None,
+        description="Which specific field/check failed, e.g. 'scenes[1]' or "
+        "'duration'. None when the failure isn't localized to one field "
+        "(e.g. a corrupt/unreadable file).",
+    )
+    evidence_ref: Optional[ArtifactRefV1] = Field(
+        default=None,
+        description="Pointer to the stored ValidationReportV1 (or offending "
+        "artifact) backing this failure - makes the failure inspectable "
+        "later instead of living only in a log line.",
+    )
+    retryable: bool = Field(
+        default=False,
+        description="Whether this failure_type is in "
+        "RETRYABLE_VALIDATION_FAILURE_TYPES at the time this record was "
+        "raised. Duplicated onto the record itself (rather than only "
+        "computed later in pipeline.py) so a failure is self-describing "
+        "without cross-referencing pipeline.py's set.",
+    )
+    suggested_fix: Optional[str] = Field(
+        default=None,
+        description="Short, validator-authored hint for a human reading a "
+        "failed run later. Distinct from feedback_context, which is prose "
+        "meant to go back into a retried LLM prompt, not for a person.",
     )
 
     model_config = {

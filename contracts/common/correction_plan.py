@@ -23,8 +23,19 @@ class CorrectionPlanV1(BaseModel):
     ValidationFailureV1.
     """
 
-    stage_id: str = Field(
-        ..., description="Stage/gate this correction plan applies to."
+    target_stage: str = Field(
+        ..., description="Stage/gate this correction plan applies to. "
+        "(Named target_stage per the M3 roadmap spec - was stage_id.)"
+    )
+    invalidated_downstream_stages: list[str] = Field(
+        default_factory=list,
+        description="Stages downstream of target_stage whose already-"
+        "produced output is no longer valid and must be re-run once "
+        "target_stage succeeds. Always [] today: the pipeline only ever "
+        "retries the current stage in place before any downstream stage "
+        "has run, so nothing is actually invalidated yet. Kept so the "
+        "field exists for M4/M5, where a downstream stage could plausibly "
+        "already be complete when an upstream retry happens.",
     )
     retryable: bool = Field(
         ..., description="Whether this failure is worth retrying locally."
@@ -38,6 +49,14 @@ class CorrectionPlanV1(BaseModel):
         default=DEFAULT_RETRY_BUDGET,
         ge=0,
         description="Max number of local correction retries for this stage.",
+    )
+    stop_condition: str = Field(
+        default="retry_budget_exhausted",
+        description="Human-readable reason retries would stop for this "
+        "plan. Only one real stop condition exists today "
+        "(retry_budget_exhausted); naming it explicitly means adding a "
+        "second one later (e.g. a non-retryable failure_type mid-loop) "
+        "doesn't require another contract change.",
     )
 
     model_config = {

@@ -1,6 +1,8 @@
 {
-  "stage_id": "S60",
+  "target_stage": "S60",
+  "invalidated_downstream_stages": [],
   "retryable": true,
   "feedback_context": "Re-render with the corrected source clip.",
-  "retry_budget": 2
+  "retry_budget": 2,
+  "stop_condition": "retry_budget_exhausted"
 }
