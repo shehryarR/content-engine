@@ -25,6 +25,25 @@ class QualityReportV1(BaseModel):
         description="Named metric scores, e.g. identity_similarity, sync_score",
     )
 
+    # Subjective quality check (M3 Day 3, item 4) - separate from the
+    # deterministic Layer 1/4 metrics above. None when the model judge
+    # wasn't run or errored out (e.g. missing API key) - a skipped
+    # subjective check is distinct from a failed one and must not be
+    # conflated with False.
+    subjective_quality_passed: bool | None = Field(
+        default=None,
+        description="Model judge's pass/fail on presentation quality. "
+        "None if the check wasn't run.",
+    )
+    subjective_quality_confidence: float | None = Field(
+        default=None, ge=0.0, le=1.0,
+        description="Model judge's confidence in its own verdict.",
+    )
+    subjective_quality_rationale: str | None = Field(
+        default=None,
+        description="Short model-authored explanation for the verdict.",
+    )
+
     model_config = {"extra": "forbid"}
 
 
