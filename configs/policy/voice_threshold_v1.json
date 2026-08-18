@@ -1,0 +1,7 @@
+{
+  "metric": "speaker_similarity",
+  "min_score": 0.72,
+  "reference": "voice_profiles.voice_id reference sample",
+  "calibrated_against": "accepted_v1 / negative_v1 fixture set",
+  "frozen_at": "2026-08-19"
+}
