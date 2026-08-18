@@ -304,8 +304,8 @@ class _FailOnceVoiceThenSucceed:
             path = self._bad_fixture_path
             mime = "audio/wav"
         else:
-            path = str(Path(__file__).parent.parent.parent / "fixtures" / "stubs" / "sine_5s.wav")
-            mime = "audio/wav"
+            path = str(Path(__file__).parent.parent.parent / "fixtures" / "stubs" / "voice_5s.mp3")
+            mime = "audio/mpeg"
             
         with open(path, "rb") as f:
             audio_data = f.read()
