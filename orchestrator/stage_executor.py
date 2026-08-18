@@ -18,10 +18,13 @@ from typing import Callable
 
 from temporalio.exceptions import ApplicationError
 
+from pydantic import ValidationError
+
 from contracts.common.envelope import ArtifactRefV1, StageEnvelopeV1, StageOutputV1, ValidationReportV1
 from contracts.common.manifest import StageRecordV1, StageStatus
 from contracts.common.telemetry import StageRunRecordV1
 from contracts.common.validation_failure import ValidationFailureV1
+from contracts.stages.idea_request import IdeaRequestV1
 from graph.pipeline_graph import STAGE_SEQUENCE
 from orchestrator.manifest_store import save_stage_record
 from orchestrator.registry import get as get_provider
@@ -190,12 +193,50 @@ def _validate_s10(
     )
 
 
+def _validate_s00_intake(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """
+    Exit validator for S00 intake.
+
+    Regression guard for the recurring "fabricated placeholder instead of
+    real IdeaRequestV1" bug (M2 Day 1 through Day 3): stub_intake.py's
+    output.payload is supposed to be the real submitted idea, dumped via
+    idea.model_dump(mode="json"). Re-parsing that payload back through
+    IdeaRequestV1 confirms it still round-trips - a placeholder or
+    malformed payload won't survive the same validation IdeaRequestV1
+    itself already enforces (e.g. identity_id required for AVATAR
+    modality), and an empty topic is checked explicitly since a bare str
+    field doesn't reject "" on its own.
+    """
+    try:
+        idea = IdeaRequestV1.model_validate(output.payload)
+    except ValidationError as exc:
+        return ValidationReportV1(
+            passed=False,
+            failures=[f"S00 output payload is not a valid IdeaRequestV1: {exc}"],
+            stage_id=stage_id,
+            failure_type="intake_mismatch",
+        )
+
+    if not idea.topic.strip():
+        return ValidationReportV1(
+            passed=False,
+            failures=["S00 output payload has an empty topic"],
+            stage_id=stage_id,
+            failure_type="intake_mismatch",
+        )
+
+    return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
+
+
 StageValidator = Callable[[StageOutputV1, str, StageEnvelopeV1], ValidationReportV1]
 
 STAGE_VALIDATORS: dict[str, StageValidator] = {
     stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
 }
 
+STAGE_VALIDATORS["S00"] = _validate_s00_intake
 STAGE_VALIDATORS["S10"] = _validate_s10
 
 def execute_stage(
