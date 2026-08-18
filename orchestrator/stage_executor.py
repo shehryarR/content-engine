@@ -524,3 +524,88 @@ def _validate_qc_stage(
 STAGE_VALIDATORS["S50"] = _validate_captions_stage
 STAGE_VALIDATORS["S60"] = _validate_assembly_stage
 STAGE_VALIDATORS["S70"] = _validate_qc_stage
+
+
+# --- Owner E (G90/S100) gate validator wrappers ---
+# G90/S100 are gate stages, not media stages, but STAGE_VALIDATORS treats
+# them the same way as any other stage - both still fell through to the
+# generic hash-check before this. See M3 Day 2 doc: "publish privacy" and
+# "synthetic flag" are explicitly gate-stage concerns.
+
+from contracts.stages.g90_disclosure import DisclosureDecisionV1
+
+
+def _validate_disclosure_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """G90 exit validator: containsSyntheticMedia must be present, and
+    True for avatar-modality runs. False is a validation failure per the
+    M0/M1 architecture rule - stated since the first milestone doc, never
+    enforced as a validator until now."""
+    payload = output.payload if isinstance(output.payload, dict) else {}
+
+    if "contains_synthetic_media" not in payload:
+        return ValidationReportV1(
+            passed=False,
+            failures=["disclosure decision missing contains_synthetic_media field"],
+            stage_id=stage_id,
+            failure_type="disclosure_missing_synthetic_flag",
+        )
+
+    modality = str(payload.get("modality", "")).upper()
+    contains_synthetic = payload.get("contains_synthetic_media")
+
+    if modality == "AVATAR" and contains_synthetic is not True:
+        return ValidationReportV1(
+            passed=False,
+            failures=[
+                f"avatar-modality run must have contains_synthetic_media=True, "
+                f"got {contains_synthetic!r}"
+            ],
+            stage_id=stage_id,
+            failure_type="disclosure_synthetic_flag_false",
+        )
+
+    return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
+
+
+def _validate_publish_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """S100 exit validator: privacy must never be 'public', and the
+    upstream G90 disclosure decision must confirm contains_synthetic_media
+    was True going into the publish call. youtube_upload.py already
+    enforces this inside one provider - this is the stage-level check
+    every future publish provider goes through, not just that one."""
+    payload = output.payload if isinstance(output.payload, dict) else {}
+    failures: list[str] = []
+
+    privacy = payload.get("privacy")
+    if privacy not in ("unlisted", "private"):
+        failures.append(f"publish privacy must be 'unlisted' or 'private', got {privacy!r}")
+
+    disclosure_ref = next(
+        (r for r in envelope.artifact_refs if "disclosure" in r.artifact_id.lower()),
+        None,
+    )
+    if disclosure_ref is None:
+        failures.append("no upstream disclosure-decision artifact found in envelope")
+    else:
+        disclosure_bytes = get_artifact(disclosure_ref)
+        disclosure = DisclosureDecisionV1.model_validate(json.loads(disclosure_bytes))
+        if not disclosure.contains_synthetic_media:
+            failures.append(
+                "upstream disclosure decision has contains_synthetic_media=False; "
+                "publish must not proceed"
+            )
+
+    return ValidationReportV1(
+        passed=len(failures) == 0,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if not failures else "publish_privacy_violation",
+    )
+
+
+STAGE_VALIDATORS["G90"] = _validate_disclosure_stage
+STAGE_VALIDATORS["S100"] = _validate_publish_stage
