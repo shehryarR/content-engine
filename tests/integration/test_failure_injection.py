@@ -219,3 +219,114 @@ async def _run_budget_exhaustion():
             assert len(s10) == 3, f"Expected 3 S10 failure rows, got {len(s10)}"
             for s in s10:
                 assert s.status == StageStatus.FAILED
+
+def test_s20_failure_injection():
+    asyncio.run(_run_s20())
+
+async def _run_s20():
+    run_id = "test_inj_s20"
+
+    registry.register_all_stubs()
+    mock_s20 = _FailOnceVoiceThenSucceed(
+        bad_fixture_path="fixtures/failures/corrupt_audio.wav",
+    )
+    registry.register(mock_s20)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=TASK_QUEUE,
+            workflows=[AvatarPipeline],
+            activities=[run_stage, record_g80_approval, run_intake_stage, mock_fetch_identity_reference],
+        ):
+            idea = IdeaRequestV1(
+                idea_request_id=run_id,
+                modality=Modality.AVATAR,
+                topic="Failure Injection Test S20",
+                identity_id="identity_001",
+                voice_id="voice_001",
+            )
+
+            await env.client.start_workflow(
+                AvatarPipeline.run,
+                args=[idea.model_dump_json()],
+                id=f"wf_{run_id}",
+                task_queue=TASK_QUEUE,
+            )
+
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                try:
+                    stages = load_manifest(run_id).stages
+                    s20 = [s for s in stages if s.stage_id == "S20"]
+                    if any(s.attempt == 2 and s.status == StageStatus.PASSED for s in s20):
+                        break
+                except ValueError:
+                    pass
+                await asyncio.sleep(0.2)
+            else:
+                pytest.fail("Timed out waiting for S20 attempt 2 to pass")
+
+            stages = load_manifest(run_id).stages
+
+            s00 = [s for s in stages if s.stage_id == "S00"]
+            assert len(s00) == 1
+            assert s00[0].status == StageStatus.PASSED
+
+            s10 = [s for s in stages if s.stage_id == "S10"]
+            assert len(s10) == 1
+            assert s10[0].status == StageStatus.PASSED
+
+            s20 = [s for s in stages if s.stage_id == "S20"]
+            assert len(s20) == 2, f"Expected 2 S20 rows, got {len(s20)}"
+            assert next(s for s in s20 if s.attempt == 1).status == StageStatus.FAILED
+            assert next(s for s in s20 if s.attempt == 2).status == StageStatus.PASSED
+
+
+from contracts.stages.s20_voice import VoiceTrackV1
+from pathlib import Path
+from datetime import datetime, timezone
+
+class _FailOnceVoiceThenSucceed:
+    def __init__(self, bad_fixture_path: str):
+        self._capability = "voice_synthesis"
+        self._bad_fixture_path = bad_fixture_path
+        self._calls = 0
+
+    @property
+    def capability(self) -> str:
+        return self._capability
+
+    def run(self, envelope: StageEnvelopeV1, run_id: str, *args, **kwargs) -> StageOutputV1:
+        self._calls += 1
+
+        if self._calls == 1:
+            path = self._bad_fixture_path
+            mime = "audio/wav"
+        else:
+            path = str(Path(__file__).parent.parent.parent / "fixtures" / "stubs" / "sine_5s.wav")
+            mime = "audio/wav"
+            
+        with open(path, "rb") as f:
+            audio_data = f.read()
+
+        artifact_id = f"voice_{envelope.stage_id}_{envelope.attempt}_{datetime.now(timezone.utc).isoformat()}"
+        artifact_ref = put_artifact(
+            data=audio_data,
+            artifact_id=artifact_id,
+            mime_type=mime,
+        )
+
+        voice_track = VoiceTrackV1(
+            run_id=run_id,
+            voice_id="stub_voice_001",
+            audio_artifact=artifact_ref,
+            duration_seconds=5.0,
+        )
+
+        return StageOutputV1(
+            payload=voice_track.model_dump(),
+            metadata={"provider": "mock_voice"},
+            artifact_refs=[artifact_ref],
+        )
+
