@@ -152,3 +152,70 @@ async def _run():
             assert len(s10) == 2, f"Expected 2 S10 rows, got {len(s10)}: {[(s.attempt, s.status) for s in s10]}"
             assert next(s for s in s10 if s.attempt == 1).status == StageStatus.FAILED
             assert next(s for s in s10 if s.attempt == 2).status == StageStatus.PASSED
+
+class _AlwaysFail:
+    def __init__(self, capability: str, bad_fixture_path: str):
+        self._capability = capability
+        self._bad_fixture_path = bad_fixture_path
+
+    @property
+    def capability(self) -> str:
+        return self._capability
+
+    def run(self, envelope: StageEnvelopeV1, run_id: str, *args, **kwargs) -> StageOutputV1:
+        with open(self._bad_fixture_path, "rb") as f:
+            bad_bytes = f.read()
+        artifact = put_artifact(
+            data=bad_bytes,
+            artifact_id=f"{self._capability}_{run_id}_bad_attempt{envelope.attempt}",
+            mime_type="application/json",
+        )
+        return StageOutputV1(
+            payload=json.loads(bad_bytes),
+            metadata={"provider": "always_fail"},
+            artifact_refs=[artifact],
+        )
+
+def test_s10_retry_budget_exhaustion():
+    asyncio.run(_run_budget_exhaustion())
+
+async def _run_budget_exhaustion():
+    run_id = "test_inj_s10_exhaust"
+
+    registry.register_all_stubs()
+    mock_s10 = _AlwaysFail(
+        capability="script_generation",
+        bad_fixture_path="fixtures/failures/persistently_malformed_script.json",
+    )
+    registry.register(mock_s10)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=TASK_QUEUE,
+            workflows=[AvatarPipeline],
+            activities=[run_stage, record_g80_approval, run_intake_stage, mock_fetch_identity_reference],
+        ):
+            idea = IdeaRequestV1(
+                idea_request_id=run_id,
+                modality=Modality.AVATAR,
+                topic="Retry Budget Test",
+                identity_id="identity_001",
+                voice_id="voice_001",
+            )
+
+            # Expected to fail due to ApplicationError at workflow level when retries exhausted
+            with pytest.raises(Exception):
+                await env.client.execute_workflow(
+                    AvatarPipeline.run,
+                    args=[idea.model_dump_json()],
+                    id=f"wf_{run_id}",
+                    task_queue=TASK_QUEUE,
+                )
+
+            # Verify manifest has 3 FAILED attempts for S10 (default retry_budget is 3 in pipeline config)
+            stages = load_manifest(run_id).stages
+            s10 = [s for s in stages if s.stage_id == "S10"]
+            assert len(s10) == 3, f"Expected 3 S10 failure rows, got {len(s10)}"
+            for s in s10:
+                assert s.status == StageStatus.FAILED
