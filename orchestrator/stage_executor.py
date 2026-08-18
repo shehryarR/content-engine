@@ -548,18 +548,78 @@ def _validate_qc_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
 ) -> ValidationReportV1:
     """S70 QC already computes its own pass/fail (stub_qc.py's Layer 1/4
-    checks) — this wrapper just surfaces that result into the shared
-    ValidationReportV1/correction-loop flow rather than re-deriving it."""
+    checks) — this wrapper surfaces that result, then separately runs the
+    model-judge subjective quality check (M3 Day 3, item 4).
+
+    The two checks are deliberately independent: a deterministic failure
+    is reported as qc_failed regardless of the model judge's verdict, and
+    the model judge only runs its own check on top - it never gates or
+    skips the deterministic result. Per M3 Day 1's rule, a model judge is
+    a human-fallback subjective check, never a sole automated gate: a
+    failed or low-confidence verdict here is deliberately NOT added to
+    RETRYABLE_VALIDATION_FAILURE_TYPES, so it surfaces as a stage failure
+    requiring a human to look at it rather than looping on an automatic
+    retry with no clear stopping condition."""
     qc_passed = bool(output.metadata.get("passed", False))
     metrics = output.payload.get("metrics", {}) if isinstance(output.payload, dict) else {}
     failed_checks = [k for k, v in metrics.items() if isinstance(v, float) and v == 0.0]
 
-    return ValidationReportV1(
-        passed=qc_passed,
-        failures=failed_checks if failed_checks else (["QC failed"] if not qc_passed else []),
-        stage_id=stage_id,
-        failure_type=None if qc_passed else "qc_failed",
+    if not qc_passed:
+        return ValidationReportV1(
+            passed=False,
+            failures=failed_checks if failed_checks else ["QC failed"],
+            stage_id=stage_id,
+            failure_type="qc_failed",
+        )
+
+    # Deterministic checks passed - now run the subjective_quality_check
+    # as a separate, clearly labeled layer. Failure here is reported with
+    # its own distinct failure_type so it's never confused with a
+    # deterministic qc_failed in logs/evidence.
+    video_ref = next(
+        (ref for ref in envelope.artifact_refs
+         if ref.artifact_id.startswith("master_video_")),
+        None,
     )
+    caption_ref = next(
+        (ref for ref in envelope.artifact_refs
+         if ref.mime_type == "application/json" and "captions" in ref.artifact_id),
+        None,
+    )
+
+    try:
+        from providers.real.qc_model_judge import judge_video_quality, MIN_CONFIDENCE
+
+        video_bytes = get_artifact(video_ref) if video_ref else b""
+        caption_text = ""
+        if caption_ref is not None:
+            captions_data = json.loads(get_artifact(caption_ref))
+            caption_text = " ".join(w.get("text", "") for w in captions_data.get("words", []))
+
+        judgment = judge_video_quality(video_bytes, caption_text)
+
+        subjective_ok = judgment["passed"] and judgment["confidence"] >= MIN_CONFIDENCE
+
+        if not subjective_ok:
+            return ValidationReportV1(
+                passed=False,
+                failures=[
+                    f"subjective_quality_check: passed={judgment['passed']}, "
+                    f"confidence={judgment['confidence']:.2f}, "
+                    f"rationale={judgment['rationale']}"
+                ],
+                stage_id=stage_id,
+                failure_type="subjective_quality_check_failed",
+            )
+    except Exception as exc:
+        # Infrastructure failure (missing API key, extraction error,
+        # malformed model response) - skip the subjective check rather
+        # than failing the whole stage over judge availability. The
+        # deterministic result above already passed, so this is a
+        # degraded-but-not-blocked outcome, logged for visibility.
+        print(f"[S70] subjective_quality_check skipped due to error: {exc}")
+
+    return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
 
 
 STAGE_VALIDATORS["S50"] = _validate_captions_stage
