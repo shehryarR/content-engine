@@ -16,6 +16,8 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+pytestmark = pytest.mark.integration
+
 
 @activity.defn(name="fetch_identity_reference")
 async def mock_fetch_identity_reference(identity_id: str) -> dict:
