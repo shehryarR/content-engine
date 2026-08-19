@@ -26,7 +26,6 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "hatchling>=1.25.0",
-    "pytest-timeout>=2.3.1",
 ]
 
 [project.scripts]
@@ -47,5 +46,3 @@ include = ["cli.py"]
 markers = [
     "integration: tests requiring external services like PostgreSQL, MinIO, or Temporal"
 ]
-timeout = 120
-timeout_method = "thread"

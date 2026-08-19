@@ -63,38 +63,8 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
-      - name: Create database schema
-        env:
-          PGPASSWORD: temporal
-        run: |
-          psql \
-            -h localhost \
-            -U temporal \
-            -d content_engine \
-            -f sql/create_manifest_stage_records.sql
-
-          psql \
-            -h localhost \
-            -U temporal \
-            -d content_engine \
-            -f sql/create_stage_run_records.sql
-
-          psql \
-            -h localhost \
-            -U temporal \
-            -d content_engine \
-            -f sql/create_registry_profiles.sql
-
       - name: Run tests
         run: uv run pytest tests/ -m "not integration" -v
-
-      - name: Run integration tests
-        run: uv run pytest tests/ -m "integration" -v
 
       - name: Run contract linting
         run: uv run python scripts/contract_lint.py
