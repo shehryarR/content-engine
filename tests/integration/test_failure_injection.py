@@ -1,10 +1,7 @@
 import asyncio
-import io
 import json
-import math
-import struct
+import subprocess
 import time
-import wave
 
 import pytest
 
@@ -24,22 +21,24 @@ from temporalio.worker import Worker
 from datetime import datetime, timezone
 
 
-def _make_valid_wav_bytes(duration_s: float = 3.0, sample_rate: int = 44100, freq: float = 440.0) -> bytes:
-    """Generate a valid WAV with a pure sine tone in-memory.
-    Passes ffprobe on any platform (correct RIFF header via wave.writeframes).
+def _make_valid_wav_bytes() -> bytes:
+    """Generate a valid 3-second WAV using ffmpeg's built-in sine generator.
+    Guaranteed to pass ffprobe on any platform since ffmpeg produced it.
+    ffmpeg is available on CI (it's already used by the voice and assembly validators).
     """
-    buf = io.BytesIO()
-    with wave.open(buf, "w") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sample_rate)
-        n_frames = int(sample_rate * duration_s)
-        frames = struct.pack(
-            f"<{n_frames}h",
-            *[int(32767 * math.sin(2 * math.pi * freq * i / sample_rate)) for i in range(n_frames)],
-        )
-        w.writeframes(frames)
-    return buf.getvalue()
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-ar", "22050", "-ac", "1",
+            "-f", "wav", "pipe:1",
+        ],
+        capture_output=True,
+        timeout=15,
+    )
+    if not proc.stdout:
+        raise RuntimeError(f"ffmpeg WAV generation failed: {proc.stderr[:300]}")
+    return proc.stdout
 
 
 @activity.defn(name="fetch_identity_reference")
