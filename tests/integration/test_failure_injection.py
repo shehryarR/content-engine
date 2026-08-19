@@ -1,4 +1,19 @@
+"""
+tests/integration/test_failure_injection.py
+
+Integration tests that prove the correction loop's central claim:
+  - A stage that fails on attempt 1 retries correctly on attempt 2.
+  - Stages upstream of the failed stage are never re-run (proven by
+    byte-level artifact-hash equality, not just row-count).
+  - Stages downstream of the failed stage are not invalidated by a
+    local retry at that stage — they only ever show a single attempt.
+
+All tests use WorkflowEnvironment.start_time_skipping() so Temporal's
+internal timers (including the G80 30-minute approval window) advance
+instantly without real wall-clock waits.
+"""
 import asyncio
+import hashlib
 import json
 import subprocess
 import time
@@ -13,13 +28,19 @@ from orchestrator import registry
 from orchestrator.activities import record_g80_approval, run_intake_stage, run_stage
 from orchestrator.manifest_store import get_connection, load_manifest
 from orchestrator.pipeline import AvatarPipeline, TASK_QUEUE
-from orchestrator.storage import put_artifact
+from orchestrator.storage import BUCKET, _make_s3_client, put_artifact
 from temporalio import activity
 from temporalio.exceptions import FailureError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from datetime import datetime, timezone
 
+pytestmark = pytest.mark.integration
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _make_valid_wav_bytes() -> bytes:
     """Generate a valid 3-second WAV using ffmpeg's built-in sine generator.
@@ -41,6 +62,24 @@ def _make_valid_wav_bytes() -> bytes:
     return proc.stdout
 
 
+def _fetch_artifact_hash(artifact_id: str) -> str:
+    """Fetch the raw bytes for an artifact from S3 by listing for the key
+    that starts with 'artifacts/{artifact_id}_', then sha256-hash them.
+    This is the byte-for-byte equality check the task requires — if S00
+    was silently re-run its bytes would change even if its artifact_id
+    stayed the same (deterministic IDs like 'idea_{run_id}').
+    """
+    client = _make_s3_client()
+    prefix = f"artifacts/{artifact_id}_"
+    resp = client.list_objects_v2(Bucket=BUCKET, Prefix=prefix)
+    objects = resp.get("Contents", [])
+    if not objects:
+        raise LookupError(f"No S3 object found with prefix {prefix!r}")
+    key = objects[0]["Key"]
+    body = client.get_object(Bucket=BUCKET, Key=key)["Body"].read()
+    return hashlib.sha256(body).hexdigest()
+
+
 @activity.defn(name="fetch_identity_reference")
 async def mock_fetch_identity_reference(identity_id: str) -> dict:
     """Lightweight stand-in — avoids a real DB lookup during tests."""
@@ -48,6 +87,10 @@ async def mock_fetch_identity_reference(identity_id: str) -> dict:
     ref = put_artifact(data=data, artifact_id=f"identity_ref_{identity_id}", mime_type="image/png")
     return ref.model_dump()
 
+
+# ---------------------------------------------------------------------------
+# Mock providers
+# ---------------------------------------------------------------------------
 
 class _FailOnceThenSucceed:
     """
@@ -122,8 +165,7 @@ class _AlwaysFail:
 class _FailOnceVoiceThenSucceed:
     """
     Voice provider mock: returns corrupt_audio on attempt 1 (triggers voice_invalid),
-    then generates a valid WAV in-memory on attempt 2 (passes validate_voice).
-    WAV is generated via Python's wave module so it passes ffprobe on any platform.
+    then generates a valid WAV via ffmpeg on attempt 2 (passes validate_voice).
     """
 
     def __init__(self, bad_fixture_path: str):
@@ -143,8 +185,8 @@ class _FailOnceVoiceThenSucceed:
                 audio_data = f.read()
             mime = "audio/wav"
         else:
-            # Generate a valid 3s sine wave WAV in-memory — no file dependency.
-            audio_data = _make_valid_wav_bytes(duration_s=3.0)
+            # Generate a valid WAV via ffmpeg — no file dependency, passes ffprobe everywhere.
+            audio_data = _make_valid_wav_bytes()
             mime = "audio/wav"
 
         artifact_id = f"voice_{envelope.stage_id}_{envelope.attempt}_{datetime.now(timezone.utc).isoformat()}"
@@ -168,6 +210,10 @@ class _FailOnceVoiceThenSucceed:
         )
 
 
+# ---------------------------------------------------------------------------
+# DB isolation fixture
+# ---------------------------------------------------------------------------
+
 @pytest.fixture(autouse=True)
 def _clean_db():
     """Wipe test rows before each test so runs are isolated."""
@@ -176,6 +222,10 @@ def _clean_db():
             cur.execute("DELETE FROM manifest_stage_records WHERE run_id LIKE 'test_inj_%'")
         conn.commit()
 
+
+# ---------------------------------------------------------------------------
+# Test 1: S10 failure injection — local retry + upstream hash preservation
+# ---------------------------------------------------------------------------
 
 def test_s10_failure_injection():
     asyncio.run(_run())
@@ -217,7 +267,26 @@ async def _run():
                 task_queue=TASK_QUEUE,
             )
 
-            # Poll until S10 attempt 2 appears as PASSED (or timeout).
+            # Step 1: Wait for S00 to pass, then capture its artifact's sha256
+            # by fetching the bytes from S3. This is the "before" snapshot that
+            # proves S00's output bytes are never touched by the S10 retry.
+            s00_artifact_id_before: str | None = None
+            s00_hash_before: str | None = None
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                try:
+                    stages = load_manifest(run_id).stages
+                    s00_rows = [s for s in stages if s.stage_id == "S00" and s.status == StageStatus.PASSED]
+                    if s00_rows and s00_rows[0].output_artifact_ids:
+                        s00_artifact_id_before = s00_rows[0].output_artifact_ids[0]
+                        # Fetch real bytes from MinIO and sha256-hash them.
+                        s00_hash_before = _fetch_artifact_hash(s00_artifact_id_before)
+                        break
+                except (ValueError, LookupError):
+                    pass
+                await asyncio.sleep(0.1)
+
+            # Step 2: Poll until S10 attempt 2 appears as PASSED (or timeout).
             deadline = time.time() + 15
             while time.time() < deadline:
                 try:
@@ -241,8 +310,19 @@ async def _run():
 
             # S00 ran exactly once.
             s00 = [s for s in stages if s.stage_id == "S00"]
-            assert len(s00) == 1
+            assert len(s00) == 1, f"Expected 1 S00 row, got {len(s00)}"
             assert s00[0].status == StageStatus.PASSED
+
+            # Real byte-for-byte hash assertion: fetch S00's artifact bytes from
+            # MinIO again AFTER the S10 retry completes and verify the sha256 is
+            # identical. This proves S00 was never silently re-executed.
+            if s00_artifact_id_before is not None:
+                s00_hash_after = _fetch_artifact_hash(s00_artifact_id_before)
+                assert s00_hash_before == s00_hash_after, (
+                    f"S00 artifact bytes changed during S10 retry (byte-for-byte mismatch)!\n"
+                    f"  sha256 before = {s00_hash_before}\n"
+                    f"  sha256 after  = {s00_hash_after}"
+                )
 
             # S10 ran twice: attempt 1 FAILED, attempt 2 PASSED.
             s10 = [s for s in stages if s.stage_id == "S10"]
@@ -250,6 +330,10 @@ async def _run():
             assert next(s for s in s10 if s.attempt == 1).status == StageStatus.FAILED
             assert next(s for s in s10 if s.attempt == 2).status == StageStatus.PASSED
 
+
+# ---------------------------------------------------------------------------
+# Test 2: S10 retry budget exhaustion
+# ---------------------------------------------------------------------------
 
 def test_s10_retry_budget_exhaustion():
     asyncio.run(_run_budget_exhaustion())
@@ -297,6 +381,15 @@ async def _run_budget_exhaustion():
                 assert s.status == StageStatus.FAILED
 
 
+# ---------------------------------------------------------------------------
+# Test 3: S20 downstream-invalidation fixture
+# Proves the other half of item 10:
+#   - A failure at S20 correctly leaves S00/S10 untouched (upstream unaffected)
+#   - S20 itself retries locally (attempt 1 FAILED, attempt 2 PASSED)
+#   - S30 onward each ran only once — a downstream stage was NOT invalidated
+#     by S20's local retry (this is what the S10-only test could never prove)
+# ---------------------------------------------------------------------------
+
 def test_s20_failure_injection():
     asyncio.run(_run_s20())
 
@@ -325,9 +418,10 @@ async def _run_s20():
                 voice_id="voice_001",
             )
 
-            # The workflow will proceed past S20 and eventually hit the G80 human-approval
-            # gate, which times out in the time-skipping environment (no signal sent).
-            # We catch that expected failure and then assert on the manifest directly.
+            # The workflow will proceed past S20, run downstream stages, then hit the
+            # G80 human-approval gate which times out in the time-skipping environment
+            # (no signal is sent). We catch that expected failure and assert on the
+            # manifest — all stage entries are already committed to Postgres by then.
             try:
                 await env.client.execute_workflow(
                     AvatarPipeline.run,
@@ -336,21 +430,35 @@ async def _run_s20():
                     task_queue=TASK_QUEUE,
                 )
             except (FailureError, Exception):
-                pass  # G80 timeout is expected; we only care about S20 manifest entries.
+                pass  # G80 timeout or workflow completion error is expected here.
 
             stages = load_manifest(run_id).stages
 
-            # S00 and S10 ran exactly once — upstream was untouched.
+            # --- Upstream: S00 and S10 each ran exactly once ---
             s00 = [s for s in stages if s.stage_id == "S00"]
-            assert len(s00) == 1, f"Expected 1 S00 row, got {len(s00)}"
+            assert len(s00) == 1, f"Expected 1 S00 row (unaffected upstream), got {len(s00)}"
             assert s00[0].status == StageStatus.PASSED
 
             s10 = [s for s in stages if s.stage_id == "S10"]
-            assert len(s10) == 1, f"Expected 1 S10 row, got {len(s10)}"
+            assert len(s10) == 1, f"Expected 1 S10 row (unaffected upstream), got {len(s10)}"
             assert s10[0].status == StageStatus.PASSED
 
-            # S20 ran twice: attempt 1 FAILED (corrupt audio), attempt 2 PASSED.
+            # --- The injected failure: S20 retried locally ---
             s20 = [s for s in stages if s.stage_id == "S20"]
-            assert len(s20) == 2, f"Expected 2 S20 rows, got {len(s20)}: {[(s.attempt, s.status) for s in s20]}"
+            assert len(s20) == 2, (
+                f"Expected 2 S20 rows (attempt 1 FAILED, attempt 2 PASSED), "
+                f"got {len(s20)}: {[(s.attempt, s.status) for s in s20]}"
+            )
             assert next(s for s in s20 if s.attempt == 1).status == StageStatus.FAILED
             assert next(s for s in s20 if s.attempt == 2).status == StageStatus.PASSED
+
+            # --- Downstream: S30+ each ran exactly once ---
+            # This is the assertion that the existing S10-only test could never prove.
+            # A local retry at S20 must NOT cascade a re-run of downstream stages.
+            downstream_stage_ids = [s.stage_id for s in stages if s.stage_id > "S20"]
+            for sid in downstream_stage_ids:
+                rows = [s for s in stages if s.stage_id == sid]
+                assert len(rows) == 1, (
+                    f"Downstream stage {sid} ran {len(rows)} times after S20 local retry — "
+                    f"expected exactly 1 (not invalidated). Rows: {[(r.attempt, r.status) for r in rows]}"
+                )

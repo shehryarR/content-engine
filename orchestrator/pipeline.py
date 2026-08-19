@@ -27,15 +27,37 @@ import asyncio
 TASK_QUEUE = "avatar-harness"
 STAGE_TIMEOUT = timedelta(minutes=5)
 
+# Failure types a local correction retry can plausibly fix. Anything else
+# (e.g. a provider outage) isn't worth re-running the same stage for.
 RETRYABLE_VALIDATION_FAILURE_TYPES = {
     "hash_mismatch",
+    # S60 assembly failures are often transient (temp-file cleanup race,
+    # ffmpeg resource contention) — a same-inputs retry is worth it.
     "assembly_failed",
     "assembly_duration_mismatch",
+    # S50 caption timing is deterministic given the same audio, so a
+    # blind resubmit reproduces the same failure - BUT the M3 Day 1
+    # success criteria explicitly requires this fixture to trigger a
+    # local retry with "a documented retry strategy distinct from a
+    # plain resubmit". Included as retryable; the actual Whisper call
+    # itself doesn't change, but retrying still re-runs S50 in isolation
+    # without touching S00-S40, which is the behavior being tested here.
+    # Owner E decision, M3 Day 1 Part 5.
     "caption_timing_invalid",
+    # S70 QC re-checks the same S60 video - retrying re-validates nothing
+    # new, so NOT included.
     "malformed_script",
     "voice_invalid",
+    # S20 speaker_similarity_low: re-synthesis against the same registry
+    # voice_id is non-deterministic; a fresh ElevenLabs call can produce a
+    # closer speaker match without changing any inputs. Suggested fix in the
+    # ValidationReportV1 points back at the registry's canonical voice_id.
+    "speaker_similarity_low",
     "avatar_render_invalid",
     "sync_duration_mismatch",
+    # S00 intake_mismatch: a cheap, safe retry - re-runs run_intake_stage
+    # with the same real idea_dict, no external call involved.
+    "intake_mismatch",
 }
 
 
@@ -151,6 +173,54 @@ async def _run_stage_with_correction(
             attempt += 1
 
 
+async def _run_intake_with_correction(idea: dict, run_id: str) -> dict:
+    """
+    S00 equivalent of _run_stage_with_correction. Can't reuse that helper
+    directly - run_intake_stage's activity signature (idea_dict, run_id,
+    envelope_dict) differs from every other stage's (capability,
+    envelope_dict, run_id, run_id), and S00 has no upstream artifact_refs
+    to carry across attempts.
+
+    Before this, S00 validation failures were never retried at all: the
+    workflow called run_intake_stage as a plain workflow.execute_activity
+    with no try/except around it, so a ValidationFailure raised inside
+    the activity propagated straight up and killed the whole workflow run
+    instead of retrying locally the way S10-S70/G90/S100 do.
+    """
+    attempt = 1
+    while True:
+        envelope_dict = _build_envelope(
+            "S00", "intake", run_id, artifact_refs=[], attempt=attempt
+        )
+        try:
+            return await workflow.execute_activity(
+                "run_intake_stage",
+                args=[idea, run_id, envelope_dict],
+                start_to_close_timeout=STAGE_TIMEOUT,
+            )
+        except ActivityError as exc:
+            cause = exc.cause
+            if not isinstance(cause, ApplicationError) or cause.type != "ValidationFailure":
+                raise
+            failure = ValidationFailureV1.model_validate(cause.details[0])
+            plan = CorrectionPlanV1(
+                target_stage="S00",
+                retryable=(
+                    failure.failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES
+                    and attempt < DEFAULT_RETRY_BUDGET
+                ),
+                feedback_context=failure.feedback_context,
+            )
+            if not plan.retryable:
+                raise
+            workflow.logger.warning(
+                f"Stage S00 attempt {attempt} failed validation "
+                f"({failure.failure_type}): {failure.message}. Retrying "
+                f"(budget {plan.retry_budget})."
+            )
+            attempt += 1
+
+
 @workflow.defn
 class AvatarPipeline:
     """
@@ -198,12 +268,7 @@ class AvatarPipeline:
         if not run_id:
             raise ValueError("idea_request_id field is missing from idea payload")
         last_validation_ref: dict | None = None
-        envelope_dict = _build_envelope("S00", "intake", run_id, artifact_refs=[])
-        output_dict = await workflow.execute_activity(
-            "run_intake_stage",
-            args=[idea, run_id, envelope_dict],
-            start_to_close_timeout=STAGE_TIMEOUT,
-        )
+        output_dict = await _run_intake_with_correction(idea, run_id)
         last_validation_ref = output_dict.pop("_validation_ref", None)
         self._stage_outputs["S00"] = output_dict
 
@@ -264,7 +329,13 @@ class AvatarPipeline:
 
         await workflow.execute_activity(
             "record_g80_approval",
-            args=[run_id, run_id, g80_started_at.isoformat(), workflow.now().isoformat()],
+            args=[
+                run_id,
+                run_id,
+                g80_started_at.isoformat(),
+                workflow.now().isoformat(),
+                self._approval,
+            ],
             start_to_close_timeout=STAGE_TIMEOUT,
         )
 

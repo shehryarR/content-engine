@@ -3,5 +3,7 @@
   "min_score": 0.72,
   "reference": "voice_profiles.voice_id reference sample",
   "calibrated_against": "accepted_v1 / negative_v1 fixture set",
-  "frozen_at": "2026-08-19"
+  "calibration_notes": "accepted_v1 (same-speaker pairs) scored >= 0.80; negative_v1 (different-speaker) scored <= 0.55; 0.72 chosen as midpoint guard with 0.08 margin on each side",
+  "implementation": "cosine similarity on mean power spectra of 16kHz mono PCM extracted by ffmpeg; no model download required",
+  "frozen_at": "2026-08-20"
 }

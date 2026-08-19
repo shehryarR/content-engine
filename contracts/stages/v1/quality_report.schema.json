@@ -26,6 +26,47 @@
       "description": "Named metric scores, e.g. identity_similarity, sync_score",
       "title": "Metrics",
       "type": "object"
+    },
+    "subjective_quality_passed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model judge's pass/fail on presentation quality. None if the check wasn't run.",
+      "title": "Subjective Quality Passed"
+    },
+    "subjective_quality_confidence": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model judge's confidence in its own verdict.",
+      "title": "Subjective Quality Confidence"
+    },
+    "subjective_quality_rationale": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Short model-authored explanation for the verdict.",
+      "title": "Subjective Quality Rationale"
     }
   },
   "required": [

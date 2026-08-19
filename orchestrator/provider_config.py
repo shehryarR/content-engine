@@ -10,6 +10,7 @@ _KNOWN_KEYS: dict[str, list[str]] = {
     "voice_synthesis": ["api_key", "model_id", "voice_id_override"],
     "avatar_render": ["api_key", "presenter_id", "base_url"],
     "caption_generation": ["api_key", "model_size", "device"],
+    "qc_model_judge": ["api_key", "model_id"],
 }
 
 def load_provider_config(capability: str) -> dict:

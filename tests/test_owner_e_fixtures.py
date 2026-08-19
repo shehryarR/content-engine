@@ -83,3 +83,141 @@ def test_failed_encode_fixture_fails_and_is_retryable():
     assert report.failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES, (
         "assembly failures must be retryable per M3 Day 1 Part 5 decision"
     )
+
+
+def test_disclosure_false_synthetic_flag_fails():
+    """G90: an avatar-modality disclosure decision with
+    contains_synthetic_media=False must fail validation."""
+    from contracts.stages.g90_disclosure import DisclosureDecisionV1
+    from orchestrator.stage_executor import _validate_disclosure_stage
+
+    bad_disclosure = DisclosureDecisionV1(
+        modality="avatar",
+        master_video_hash="a" * 64,
+        contains_synthetic_media=False,  # violates the M0/M1 rule
+        policy_basis="policy_stub_g90",
+    )
+    output = StageOutputV1(
+        payload=bad_disclosure.model_dump(mode="json"),
+        metadata={},
+        artifact_refs=[],
+    )
+    envelope = _make_envelope("G90", "disclosure_check", artifact_refs=[])
+
+    report = _validate_disclosure_stage(output, "G90", envelope)
+
+    assert report.passed is False
+    assert report.failure_type == "disclosure_synthetic_flag_false"
+    assert report.failure_type not in RETRYABLE_VALIDATION_FAILURE_TYPES, (
+        "a synthetic-flag violation is a policy issue, not something a "
+        "blind retry fixes - must not be retryable"
+    )
+
+
+def test_publish_public_privacy_fails():
+    """S100: privacy='public' must fail validation, regardless of
+    upstream disclosure state."""
+    from contracts.stages.s100_publish import PublishReceiptV1
+    from orchestrator.stage_executor import _validate_publish_stage
+
+    bad_receipt = PublishReceiptV1(
+        run_id="test_run_s100",
+        platform_video_id=None,
+        privacy="public",  # never allowed
+        dry_run=True,
+    )
+    output = StageOutputV1(
+        payload=bad_receipt.model_dump(mode="json"),
+        metadata={},
+        artifact_refs=[],
+    )
+    envelope = _make_envelope("S100", "publish", artifact_refs=[])
+
+    report = _validate_publish_stage(output, "S100", envelope)
+
+    assert report.passed is False
+    assert report.failure_type == "publish_privacy_violation"
+    assert report.failure_type not in RETRYABLE_VALIDATION_FAILURE_TYPES
+
+
+def test_qc_stage_skips_subjective_check_on_deterministic_failure():
+    """If the deterministic QC layer already failed, the model judge
+    should never even run - qc_failed must be reported as-is."""
+    from orchestrator.stage_executor import _validate_qc_stage
+
+    output = StageOutputV1(
+        payload={"metrics": {"has_video_stream": 0.0}},
+        metadata={"passed": False},
+        artifact_refs=[],
+    )
+    envelope = _make_envelope("S70", "quality_control", artifact_refs=[])
+
+    report = _validate_qc_stage(output, "S70", envelope)
+
+    assert report.passed is False
+    assert report.failure_type == "qc_failed"
+
+
+def test_qc_stage_subjective_check_failure_reported_separately(monkeypatch):
+    """A failed/low-confidence model judgment must produce its own
+    distinct failure_type, never conflated with qc_failed, and must not
+    be retryable."""
+    from orchestrator.pipeline import RETRYABLE_VALIDATION_FAILURE_TYPES
+    from orchestrator.stage_executor import _validate_qc_stage
+
+    fixture_path = Path("fixtures/stubs/black_5s.mp4")
+    video_artifact = put_artifact(
+        data=fixture_path.read_bytes(), artifact_id="test_qc_subjective_video", mime_type="video/mp4",
+    )
+
+    def fake_judge(video_bytes, caption_text):
+        return {"passed": False, "confidence": 0.9, "rationale": "garbled captions visible"}
+
+    monkeypatch.setattr(
+        "providers.real.qc_model_judge.judge_video_quality", fake_judge
+    )
+
+    output = StageOutputV1(
+        payload={"metrics": {"has_video_stream": 1.0}},
+        metadata={"passed": True},
+        artifact_refs=[video_artifact],
+    )
+    envelope = _make_envelope("S70", "quality_control", artifact_refs=[video_artifact])
+
+    report = _validate_qc_stage(output, "S70", envelope)
+
+    assert report.passed is False
+    assert report.failure_type == "subjective_quality_check_failed"
+    assert report.failure_type not in RETRYABLE_VALIDATION_FAILURE_TYPES, (
+        "model judge failures must route to human review, not auto-retry"
+    )
+
+
+def test_qc_stage_subjective_check_error_does_not_block_deterministic_pass(monkeypatch):
+    """If the model judge itself errors (e.g. missing API key), the
+    deterministic pass must still go through - judge unavailability
+    should never fail an otherwise-healthy stage."""
+    from orchestrator.stage_executor import _validate_qc_stage
+
+    fixture_path = Path("fixtures/stubs/black_5s.mp4")
+    video_artifact = put_artifact(
+        data=fixture_path.read_bytes(), artifact_id="test_qc_judge_error_video", mime_type="video/mp4",
+    )
+
+    def broken_judge(video_bytes, caption_text):
+        raise RuntimeError("qc_model_judge requires an api_key")
+
+    monkeypatch.setattr(
+        "providers.real.qc_model_judge.judge_video_quality", broken_judge
+    )
+
+    output = StageOutputV1(
+        payload={"metrics": {"has_video_stream": 1.0}},
+        metadata={"passed": True},
+        artifact_refs=[video_artifact],
+    )
+    envelope = _make_envelope("S70", "quality_control", artifact_refs=[video_artifact])
+
+    report = _validate_qc_stage(output, "S70", envelope)
+
+    assert report.passed is True, "judge infrastructure errors must not block a deterministic pass"

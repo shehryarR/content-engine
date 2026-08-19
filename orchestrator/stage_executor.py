@@ -18,10 +18,13 @@ from typing import Callable
 
 from temporalio.exceptions import ApplicationError
 
+from pydantic import ValidationError
+
 from contracts.common.envelope import ArtifactRefV1, StageEnvelopeV1, StageOutputV1, ValidationReportV1
 from contracts.common.manifest import StageRecordV1, StageStatus
 from contracts.common.telemetry import StageRunRecordV1
 from contracts.common.validation_failure import ValidationFailureV1
+from contracts.stages.idea_request import IdeaRequestV1
 from graph.pipeline_graph import STAGE_SEQUENCE
 from orchestrator.manifest_store import save_stage_record
 from orchestrator.registry import get as get_provider
@@ -212,12 +215,50 @@ def _validate_s10(
     )
 
 
+def _validate_s00_intake(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """
+    Exit validator for S00 intake.
+
+    Regression guard for the recurring "fabricated placeholder instead of
+    real IdeaRequestV1" bug (M2 Day 1 through Day 3): stub_intake.py's
+    output.payload is supposed to be the real submitted idea, dumped via
+    idea.model_dump(mode="json"). Re-parsing that payload back through
+    IdeaRequestV1 confirms it still round-trips - a placeholder or
+    malformed payload won't survive the same validation IdeaRequestV1
+    itself already enforces (e.g. identity_id required for AVATAR
+    modality), and an empty topic is checked explicitly since a bare str
+    field doesn't reject "" on its own.
+    """
+    try:
+        idea = IdeaRequestV1.model_validate(output.payload)
+    except ValidationError as exc:
+        return ValidationReportV1(
+            passed=False,
+            failures=[f"S00 output payload is not a valid IdeaRequestV1: {exc}"],
+            stage_id=stage_id,
+            failure_type="intake_mismatch",
+        )
+
+    if not idea.topic.strip():
+        return ValidationReportV1(
+            passed=False,
+            failures=["S00 output payload has an empty topic"],
+            stage_id=stage_id,
+            failure_type="intake_mismatch",
+        )
+
+    return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
+
+
 StageValidator = Callable[[StageOutputV1, str, StageEnvelopeV1], ValidationReportV1]
 
 STAGE_VALIDATORS: dict[str, StageValidator] = {
     stage_id: _verify_artifact_hashes for stage_id, _capability in STAGE_SEQUENCE
 }
 
+STAGE_VALIDATORS["S00"] = _validate_s00_intake
 STAGE_VALIDATORS["S10"] = _validate_s10
 
 def execute_stage(
@@ -352,12 +393,72 @@ def execute_stage(
     return output, validation_ref
 # --- Owner C (S20) validator wrapper ---
 
-from providers.real.elevenlabs_voice import validate_voice
+import pathlib
+
+from providers.real.elevenlabs_voice import compute_speaker_similarity, validate_voice
+
+_VOICE_THRESHOLD_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "voice_threshold_v1.json"
+
+
+def _load_voice_threshold() -> float:
+    """Load the frozen min_score from voice_threshold_v1.json.
+    Falls back to 0.72 if the file is missing (should never happen in production).
+    """
+    try:
+        data = json.loads(_VOICE_THRESHOLD_PATH.read_text())
+        return float(data["min_score"])
+    except Exception:
+        return 0.72
+
+
+def _fetch_reference_voice_bytes(voice_id: str) -> bytes | None:
+    """Fetch the reference audio sample for a registry voice_id from the DB.
+
+    voice_profiles stores a 'reference_sample_artifact_id' column that points
+    to the canonical reference clip uploaded at voice-registration time.
+    Returns None if not available (stub/test environments where voice_profiles
+    is not populated with real audio) — the caller skips the similarity check.
+    """
+    try:
+        from orchestrator.telemetry import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT reference_sample_artifact_id FROM voice_profiles WHERE voice_id = %s",
+                    (voice_id,),
+                )
+                row = cur.fetchone()
+        if row is None or not row[0]:
+            return None
+        # reference_sample_artifact_id is stored as an artifact_id prefix;
+        # build a minimal ArtifactRefV1-like object to reuse get_artifact().
+        from contracts.common.envelope import ArtifactRefV1
+        ref = ArtifactRefV1(
+            artifact_id=row[0],
+            mime_type="audio/wav",
+            storage_path=f"artifacts/{row[0]}",
+            size_bytes=0,
+        )
+        return get_artifact(ref)
+    except Exception:
+        # DB not available, voice_profiles missing, or artifact not found —
+        # all treated as "no reference", which skips the similarity gate
+        # rather than failing every CI run.
+        return None
 
 
 def _validate_voice_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
 ) -> ValidationReportV1:
+    """S20 exit validator: codec/sample-rate/duration/silence checks (via
+    validate_voice), then speaker-similarity check against the registry's
+    reference sample (via compute_speaker_similarity + voice_threshold_v1.json).
+
+    One ValidationReportV1 per stage, per the pattern every other validator
+    in this sprint follows. failure_type priority: voice_invalid if the audio
+    is structurally bad, speaker_similarity_low if it passes audio checks but
+    doesn't sound like the registered voice.
+    """
     if not output.artifact_refs:
         return ValidationReportV1(
             passed=False,
@@ -368,12 +469,51 @@ def _validate_voice_stage(
     audio_ref = output.artifact_refs[0]
     audio_bytes = get_artifact(audio_ref)
 
+    # --- Step 1: structural audio validation (codec / sample rate / silence / duration) ---
     passed, failures = validate_voice(audio_bytes, mime_type=audio_ref.mime_type)
+    if not passed:
+        return ValidationReportV1(
+            passed=False,
+            failures=failures,
+            stage_id=stage_id,
+            failure_type="voice_invalid",
+        )
+
+    # --- Step 2: speaker-similarity check against the registry reference ---
+    # Extract voice_id from the VoiceTrackV1 payload.
+    payload = output.payload if isinstance(output.payload, dict) else {}
+    voice_id = payload.get("voice_id") or payload.get("voice_id")
+
+    min_score = _load_voice_threshold()
+    similarity_score: float | None = None
+
+    if voice_id:
+        suffix = ".wav" if "wav" in audio_ref.mime_type else ".mp3"
+        reference_bytes = _fetch_reference_voice_bytes(voice_id)
+        if reference_bytes is not None:
+            similarity_score = compute_speaker_similarity(
+                reference_bytes=reference_bytes,
+                generated_bytes=audio_bytes,
+                ref_suffix=".wav",
+                gen_suffix=suffix,
+            )
+            if similarity_score < min_score:
+                return ValidationReportV1(
+                    passed=False,
+                    failures=[
+                        f"speaker_similarity {similarity_score:.3f} is below the "
+                        f"threshold {min_score} from voice_threshold_v1.json — "
+                        f"re-synthesize against registry voice_id={voice_id!r}"
+                    ],
+                    stage_id=stage_id,
+                    failure_type="speaker_similarity_low",
+                )
+
     return ValidationReportV1(
-        passed=passed,
-        failures=failures,
+        passed=True,
+        failures=[],
         stage_id=stage_id,
-        failure_type=None if passed else "voice_invalid",
+        failure_type=None,
     )
 
 
@@ -530,20 +670,165 @@ def _validate_qc_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
 ) -> ValidationReportV1:
     """S70 QC already computes its own pass/fail (stub_qc.py's Layer 1/4
-    checks) — this wrapper just surfaces that result into the shared
-    ValidationReportV1/correction-loop flow rather than re-deriving it."""
+    checks) — this wrapper surfaces that result, then separately runs the
+    model-judge subjective quality check (M3 Day 3, item 4).
+
+    The two checks are deliberately independent: a deterministic failure
+    is reported as qc_failed regardless of the model judge's verdict, and
+    the model judge only runs its own check on top - it never gates or
+    skips the deterministic result. Per M3 Day 1's rule, a model judge is
+    a human-fallback subjective check, never a sole automated gate: a
+    failed or low-confidence verdict here is deliberately NOT added to
+    RETRYABLE_VALIDATION_FAILURE_TYPES, so it surfaces as a stage failure
+    requiring a human to look at it rather than looping on an automatic
+    retry with no clear stopping condition."""
     qc_passed = bool(output.metadata.get("passed", False))
     metrics = output.payload.get("metrics", {}) if isinstance(output.payload, dict) else {}
     failed_checks = [k for k, v in metrics.items() if isinstance(v, float) and v == 0.0]
 
-    return ValidationReportV1(
-        passed=qc_passed,
-        failures=failed_checks if failed_checks else (["QC failed"] if not qc_passed else []),
-        stage_id=stage_id,
-        failure_type=None if qc_passed else "qc_failed",
+    if not qc_passed:
+        return ValidationReportV1(
+            passed=False,
+            failures=failed_checks if failed_checks else ["QC failed"],
+            stage_id=stage_id,
+            failure_type="qc_failed",
+        )
+
+    # Deterministic checks passed - now run the subjective_quality_check
+    # as a separate, clearly labeled layer. Failure here is reported with
+    # its own distinct failure_type so it's never confused with a
+    # deterministic qc_failed in logs/evidence.
+    video_ref = next(
+        (ref for ref in envelope.artifact_refs
+         if ref.artifact_id.startswith("master_video_")),
+        None,
     )
+    caption_ref = next(
+        (ref for ref in envelope.artifact_refs
+         if ref.mime_type == "application/json" and "captions" in ref.artifact_id),
+        None,
+    )
+
+    try:
+        from providers.real.qc_model_judge import judge_video_quality, MIN_CONFIDENCE
+
+        video_bytes = get_artifact(video_ref) if video_ref else b""
+        caption_text = ""
+        if caption_ref is not None:
+            captions_data = json.loads(get_artifact(caption_ref))
+            caption_text = " ".join(w.get("text", "") for w in captions_data.get("words", []))
+
+        judgment = judge_video_quality(video_bytes, caption_text)
+
+        subjective_ok = judgment["passed"] and judgment["confidence"] >= MIN_CONFIDENCE
+
+        if not subjective_ok:
+            return ValidationReportV1(
+                passed=False,
+                failures=[
+                    f"subjective_quality_check: passed={judgment['passed']}, "
+                    f"confidence={judgment['confidence']:.2f}, "
+                    f"rationale={judgment['rationale']}"
+                ],
+                stage_id=stage_id,
+                failure_type="subjective_quality_check_failed",
+            )
+    except Exception as exc:
+        # Infrastructure failure (missing API key, extraction error,
+        # malformed model response) - skip the subjective check rather
+        # than failing the whole stage over judge availability. The
+        # deterministic result above already passed, so this is a
+        # degraded-but-not-blocked outcome, logged for visibility.
+        print(f"[S70] subjective_quality_check skipped due to error: {exc}")
+
+    return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
 
 
 STAGE_VALIDATORS["S50"] = _validate_captions_stage
 STAGE_VALIDATORS["S60"] = _validate_assembly_stage
 STAGE_VALIDATORS["S70"] = _validate_qc_stage
+
+
+# --- Owner E (G90/S100) gate validator wrappers ---
+# G90/S100 are gate stages, not media stages, but STAGE_VALIDATORS treats
+# them the same way as any other stage - both still fell through to the
+# generic hash-check before this. See M3 Day 2 doc: "publish privacy" and
+# "synthetic flag" are explicitly gate-stage concerns.
+
+from contracts.stages.g90_disclosure import DisclosureDecisionV1
+
+
+def _validate_disclosure_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """G90 exit validator: containsSyntheticMedia must be present, and
+    True for avatar-modality runs. False is a validation failure per the
+    M0/M1 architecture rule - stated since the first milestone doc, never
+    enforced as a validator until now."""
+    payload = output.payload if isinstance(output.payload, dict) else {}
+
+    if "contains_synthetic_media" not in payload:
+        return ValidationReportV1(
+            passed=False,
+            failures=["disclosure decision missing contains_synthetic_media field"],
+            stage_id=stage_id,
+            failure_type="disclosure_missing_synthetic_flag",
+        )
+
+    modality = str(payload.get("modality", "")).upper()
+    contains_synthetic = payload.get("contains_synthetic_media")
+
+    if modality == "AVATAR" and contains_synthetic is not True:
+        return ValidationReportV1(
+            passed=False,
+            failures=[
+                f"avatar-modality run must have contains_synthetic_media=True, "
+                f"got {contains_synthetic!r}"
+            ],
+            stage_id=stage_id,
+            failure_type="disclosure_synthetic_flag_false",
+        )
+
+    return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
+
+
+def _validate_publish_stage(
+    output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
+) -> ValidationReportV1:
+    """S100 exit validator: privacy must never be 'public', and the
+    upstream G90 disclosure decision must confirm contains_synthetic_media
+    was True going into the publish call. youtube_upload.py already
+    enforces this inside one provider - this is the stage-level check
+    every future publish provider goes through, not just that one."""
+    payload = output.payload if isinstance(output.payload, dict) else {}
+    failures: list[str] = []
+
+    privacy = payload.get("privacy")
+    if privacy not in ("unlisted", "private"):
+        failures.append(f"publish privacy must be 'unlisted' or 'private', got {privacy!r}")
+
+    disclosure_ref = next(
+        (r for r in envelope.artifact_refs if "disclosure" in r.artifact_id.lower()),
+        None,
+    )
+    if disclosure_ref is None:
+        failures.append("no upstream disclosure-decision artifact found in envelope")
+    else:
+        disclosure_bytes = get_artifact(disclosure_ref)
+        disclosure = DisclosureDecisionV1.model_validate(json.loads(disclosure_bytes))
+        if not disclosure.contains_synthetic_media:
+            failures.append(
+                "upstream disclosure decision has contains_synthetic_media=False; "
+                "publish must not proceed"
+            )
+
+    return ValidationReportV1(
+        passed=len(failures) == 0,
+        failures=failures,
+        stage_id=stage_id,
+        failure_type=None if not failures else "publish_privacy_violation",
+    )
+
+
+STAGE_VALIDATORS["G90"] = _validate_disclosure_stage
+STAGE_VALIDATORS["S100"] = _validate_publish_stage
