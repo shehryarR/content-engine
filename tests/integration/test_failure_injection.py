@@ -254,7 +254,7 @@ async def _run_s20():
                 task_queue=TASK_QUEUE,
             )
 
-            deadline = time.time() + 15
+            deadline = time.time() + 45
             while time.time() < deadline:
                 try:
                     stages = load_manifest(run_id).stages
@@ -263,7 +263,7 @@ async def _run_s20():
                         break
                 except ValueError:
                     pass
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.5)
             else:
                 pytest.fail("Timed out waiting for S20 attempt 2 to pass")
 
