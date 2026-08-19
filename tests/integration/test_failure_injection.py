@@ -1,20 +1,45 @@
 import asyncio
+import io
 import json
+import math
+import struct
 import time
+import wave
 
 import pytest
 
 from contracts.common.envelope import StageEnvelopeV1, StageOutputV1
 from contracts.common.manifest import StageStatus
 from contracts.stages.idea_request import IdeaRequestV1, Modality
+from contracts.stages.s20_voice import VoiceTrackV1
 from orchestrator import registry
 from orchestrator.activities import record_g80_approval, run_intake_stage, run_stage
 from orchestrator.manifest_store import get_connection, load_manifest
 from orchestrator.pipeline import AvatarPipeline, TASK_QUEUE
 from orchestrator.storage import put_artifact
 from temporalio import activity
+from temporalio.exceptions import FailureError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
+from datetime import datetime, timezone
+
+
+def _make_valid_wav_bytes(duration_s: float = 3.0, sample_rate: int = 44100, freq: float = 440.0) -> bytes:
+    """Generate a valid WAV with a pure sine tone in-memory.
+    Passes ffprobe on any platform (correct RIFF header via wave.writeframes).
+    """
+    buf = io.BytesIO()
+    with wave.open(buf, "w") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        n_frames = int(sample_rate * duration_s)
+        frames = struct.pack(
+            f"<{n_frames}h",
+            *[int(32767 * math.sin(2 * math.pi * freq * i / sample_rate)) for i in range(n_frames)],
+        )
+        w.writeframes(frames)
+    return buf.getvalue()
 
 
 @activity.defn(name="fetch_identity_reference")
@@ -68,6 +93,79 @@ class _FailOnceThenSucceed:
             payload=self._good_payload,
             metadata={"provider": "mock_success"},
             artifact_refs=[artifact],
+        )
+
+
+class _AlwaysFail:
+    def __init__(self, capability: str, bad_fixture_path: str):
+        self._capability = capability
+        self._bad_fixture_path = bad_fixture_path
+
+    @property
+    def capability(self) -> str:
+        return self._capability
+
+    def run(self, envelope: StageEnvelopeV1, run_id: str, *args, **kwargs) -> StageOutputV1:
+        with open(self._bad_fixture_path, "rb") as f:
+            bad_bytes = f.read()
+        artifact = put_artifact(
+            data=bad_bytes,
+            artifact_id=f"{self._capability}_{run_id}_bad_attempt{envelope.attempt}",
+            mime_type="application/json",
+        )
+        return StageOutputV1(
+            payload=json.loads(bad_bytes),
+            metadata={"provider": "always_fail"},
+            artifact_refs=[artifact],
+        )
+
+
+class _FailOnceVoiceThenSucceed:
+    """
+    Voice provider mock: returns corrupt_audio on attempt 1 (triggers voice_invalid),
+    then generates a valid WAV in-memory on attempt 2 (passes validate_voice).
+    WAV is generated via Python's wave module so it passes ffprobe on any platform.
+    """
+
+    def __init__(self, bad_fixture_path: str):
+        self._capability = "voice_synthesis"
+        self._bad_fixture_path = bad_fixture_path
+        self._calls = 0
+
+    @property
+    def capability(self) -> str:
+        return self._capability
+
+    def run(self, envelope: StageEnvelopeV1, run_id: str, *args, **kwargs) -> StageOutputV1:
+        self._calls += 1
+
+        if self._calls == 1:
+            with open(self._bad_fixture_path, "rb") as f:
+                audio_data = f.read()
+            mime = "audio/wav"
+        else:
+            # Generate a valid 3s sine wave WAV in-memory — no file dependency.
+            audio_data = _make_valid_wav_bytes(duration_s=3.0)
+            mime = "audio/wav"
+
+        artifact_id = f"voice_{envelope.stage_id}_{envelope.attempt}_{datetime.now(timezone.utc).isoformat()}"
+        artifact_ref = put_artifact(
+            data=audio_data,
+            artifact_id=artifact_id,
+            mime_type=mime,
+        )
+
+        voice_track = VoiceTrackV1(
+            run_id=run_id,
+            voice_id="stub_voice_001",
+            audio_artifact=artifact_ref,
+            duration_seconds=3.0,
+        )
+
+        return StageOutputV1(
+            payload=voice_track.model_dump(),
+            metadata={"provider": "mock_voice"},
+            artifact_refs=[artifact_ref],
         )
 
 
@@ -153,31 +251,10 @@ async def _run():
             assert next(s for s in s10 if s.attempt == 1).status == StageStatus.FAILED
             assert next(s for s in s10 if s.attempt == 2).status == StageStatus.PASSED
 
-class _AlwaysFail:
-    def __init__(self, capability: str, bad_fixture_path: str):
-        self._capability = capability
-        self._bad_fixture_path = bad_fixture_path
-
-    @property
-    def capability(self) -> str:
-        return self._capability
-
-    def run(self, envelope: StageEnvelopeV1, run_id: str, *args, **kwargs) -> StageOutputV1:
-        with open(self._bad_fixture_path, "rb") as f:
-            bad_bytes = f.read()
-        artifact = put_artifact(
-            data=bad_bytes,
-            artifact_id=f"{self._capability}_{run_id}_bad_attempt{envelope.attempt}",
-            mime_type="application/json",
-        )
-        return StageOutputV1(
-            payload=json.loads(bad_bytes),
-            metadata={"provider": "always_fail"},
-            artifact_refs=[artifact],
-        )
 
 def test_s10_retry_budget_exhaustion():
     asyncio.run(_run_budget_exhaustion())
+
 
 async def _run_budget_exhaustion():
     run_id = "test_inj_s10_exhaust"
@@ -220,8 +297,10 @@ async def _run_budget_exhaustion():
             for s in s10:
                 assert s.status == StageStatus.FAILED
 
+
 def test_s20_failure_injection():
     asyncio.run(_run_s20())
+
 
 async def _run_s20():
     run_id = "test_inj_s20"
@@ -247,86 +326,32 @@ async def _run_s20():
                 voice_id="voice_001",
             )
 
-            await env.client.start_workflow(
-                AvatarPipeline.run,
-                args=[idea.model_dump_json()],
-                id=f"wf_{run_id}",
-                task_queue=TASK_QUEUE,
-            )
-
-            deadline = time.time() + 45
-            while time.time() < deadline:
-                try:
-                    stages = load_manifest(run_id).stages
-                    s20 = [s for s in stages if s.stage_id == "S20"]
-                    if any(s.attempt == 2 and s.status == StageStatus.PASSED for s in s20):
-                        break
-                except ValueError:
-                    pass
-                await asyncio.sleep(0.5)
-            else:
-                pytest.fail("Timed out waiting for S20 attempt 2 to pass")
+            # The workflow will proceed past S20 and eventually hit the G80 human-approval
+            # gate, which times out in the time-skipping environment (no signal sent).
+            # We catch that expected failure and then assert on the manifest directly.
+            try:
+                await env.client.execute_workflow(
+                    AvatarPipeline.run,
+                    args=[idea.model_dump_json()],
+                    id=f"wf_{run_id}",
+                    task_queue=TASK_QUEUE,
+                )
+            except (FailureError, Exception):
+                pass  # G80 timeout is expected; we only care about S20 manifest entries.
 
             stages = load_manifest(run_id).stages
 
+            # S00 and S10 ran exactly once — upstream was untouched.
             s00 = [s for s in stages if s.stage_id == "S00"]
-            assert len(s00) == 1
+            assert len(s00) == 1, f"Expected 1 S00 row, got {len(s00)}"
             assert s00[0].status == StageStatus.PASSED
 
             s10 = [s for s in stages if s.stage_id == "S10"]
-            assert len(s10) == 1
+            assert len(s10) == 1, f"Expected 1 S10 row, got {len(s10)}"
             assert s10[0].status == StageStatus.PASSED
 
+            # S20 ran twice: attempt 1 FAILED (corrupt audio), attempt 2 PASSED.
             s20 = [s for s in stages if s.stage_id == "S20"]
-            assert len(s20) == 2, f"Expected 2 S20 rows, got {len(s20)}"
+            assert len(s20) == 2, f"Expected 2 S20 rows, got {len(s20)}: {[(s.attempt, s.status) for s in s20]}"
             assert next(s for s in s20 if s.attempt == 1).status == StageStatus.FAILED
             assert next(s for s in s20 if s.attempt == 2).status == StageStatus.PASSED
-
-
-from contracts.stages.s20_voice import VoiceTrackV1
-from pathlib import Path
-from datetime import datetime, timezone
-
-class _FailOnceVoiceThenSucceed:
-    def __init__(self, bad_fixture_path: str):
-        self._capability = "voice_synthesis"
-        self._bad_fixture_path = bad_fixture_path
-        self._calls = 0
-
-    @property
-    def capability(self) -> str:
-        return self._capability
-
-    def run(self, envelope: StageEnvelopeV1, run_id: str, *args, **kwargs) -> StageOutputV1:
-        self._calls += 1
-
-        if self._calls == 1:
-            path = self._bad_fixture_path
-            mime = "audio/wav"
-        else:
-            path = str(Path(__file__).parent.parent.parent / "fixtures" / "stubs" / "voice_5s.mp3")
-            mime = "audio/mpeg"
-            
-        with open(path, "rb") as f:
-            audio_data = f.read()
-
-        artifact_id = f"voice_{envelope.stage_id}_{envelope.attempt}_{datetime.now(timezone.utc).isoformat()}"
-        artifact_ref = put_artifact(
-            data=audio_data,
-            artifact_id=artifact_id,
-            mime_type=mime,
-        )
-
-        voice_track = VoiceTrackV1(
-            run_id=run_id,
-            voice_id="stub_voice_001",
-            audio_artifact=artifact_ref,
-            duration_seconds=5.0,
-        )
-
-        return StageOutputV1(
-            payload=voice_track.model_dump(),
-            metadata={"provider": "mock_voice"},
-            artifact_refs=[artifact_ref],
-        )
-
