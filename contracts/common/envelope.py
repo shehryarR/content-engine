@@ -220,6 +220,11 @@ class ValidationReportV1(BaseModel):
         "or when a validator hasn't been updated to set one - callers "
         "should not assume a missing failure_type means 'hash_mismatch'.",
     )
+
+    failed_field: Optional[str] = Field(
+        default=None,
+        description="Which specific field/check failed, e.g. 'scenes[1]' or 'duration'.",
+    )
     validated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC timestamp when validation ran.",
