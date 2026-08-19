@@ -33,6 +33,19 @@
       "description": "Machine-readable failure category set by the validator that produced this report, e.g. 'hash_mismatch', 'duration_mismatch', 'missing_captions'. None when passed=True, or when a validator hasn't been updated to set one - callers should not assume a missing failure_type means 'hash_mismatch'.",
       "title": "Failure Type"
     },
+    "failed_field": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Which specific field/check failed, e.g. 'scenes[1]' or 'duration'.",
+      "title": "Failed Field"
+    },
     "validated_at": {
       "description": "UTC timestamp when validation ran.",
       "format": "date-time",

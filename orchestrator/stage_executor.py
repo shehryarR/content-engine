@@ -110,6 +110,7 @@ def _validate_s10_script(
     - combined scene length must never exceed the 1500-character hard cap
     """
     failures: list[str] = []
+    failed_field: str | None = None
 
     payload = output.payload
 
@@ -120,44 +121,58 @@ def _validate_s10_script(
             failures=failures,
             stage_id=stage_id,
             failure_type="malformed_script",
+            failed_field="payload",
         )
 
     if set(payload.keys()) != {"run_id", "scenes"}:
         failures.append(
             "S10 output must contain exactly the 'run_id' and 'scenes' fields."
         )
+        if failed_field is None:
+            failed_field = "payload"
 
     scenes = payload.get("scenes")
 
     if not isinstance(scenes, list):
         failures.append("S10 'scenes' must be a list.")
+        if failed_field is None:
+            failed_field = "scenes"
     else:
         if len(scenes) != 3:
             failures.append(
                 f"S10 script must contain exactly 3 scenes; got {len(scenes)}."
             )
+            if failed_field is None:
+                failed_field = "scenes"
 
         for index, scene in enumerate(scenes, start=1):
             if not isinstance(scene, str):
                 failures.append(
                     f"S10 scene {index} must be a string."
                 )
+                if failed_field is None:
+                    failed_field = f"scenes[{index-1}]"
             elif not scene.strip():
                 failures.append(
                     f"S10 scene {index} must be non-empty."
                 )
+                if failed_field is None:
+                    failed_field = f"scenes[{index-1}]"
 
         if all(isinstance(scene, str) for scene in scenes):
             combined_length = sum(len(scene) for scene in scenes)
 
             if combined_length > 1500:
                 failures.append(f"S10 combined scene length is {combined_length} characters; hard cap is 1500.")
+                if failed_field is None:
+                    failed_field = "scenes"
 
     return ValidationReportV1(
         passed=len(failures) == 0,
         failures=failures,
         stage_id=stage_id,
         failure_type="malformed_script" if failures else None,
+        failed_field=failed_field if failures else None,
     )
 
 
@@ -177,6 +192,7 @@ def _validate_s10(
             failures=[],
             stage_id=stage_id,
             failure_type=None,
+            failed_field=None,
         )
 
     failure_type = (
@@ -184,12 +200,18 @@ def _validate_s10(
         if script_report.failures
         else hash_report.failure_type
     )
+    failed_field = (
+        script_report.failed_field
+        if script_report.failures
+        else hash_report.failed_field
+    )
 
     return ValidationReportV1(
         passed=False,
         failures=failures,
         stage_id=stage_id,
         failure_type=failure_type,
+        failed_field=failed_field,
     )
 
 
@@ -291,6 +313,7 @@ def execute_stage(
                 feedback_context="; ".join(validation_report.failures),
                 evidence_ref=evidence_ref,
                 retryable=failure_type in RETRYABLE_VALIDATION_FAILURE_TYPES,
+                failed_field=validation_report.failed_field,
             )
             # Cache feedback context for retry
             _stage_feedback_cache[f"{run_id}_{envelope.stage_id}"] = failure.feedback_context or ""
