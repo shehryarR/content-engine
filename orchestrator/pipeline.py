@@ -48,7 +48,16 @@ RETRYABLE_VALIDATION_FAILURE_TYPES = {
     # new, so NOT included.
     "malformed_script",
     "voice_invalid",
+    # S20 speaker_similarity_low: re-synthesis against the same registry
+    # voice_id is non-deterministic; a fresh ElevenLabs call can produce a
+    # closer speaker match without changing any inputs. Suggested fix in the
+    # ValidationReportV1 points back at the registry's canonical voice_id.
+    "speaker_similarity_low",
     "avatar_render_invalid",
+     # S30 identity_similarity_low: same reasoning as speaker_similarity_low
+    # above - re-rendering against the same registered identity image via
+    # D-ID is non-deterministic, so a fresh attempt can clear the threshold
+    "identity_similarity_low",
     "sync_duration_mismatch",
     # S00 intake_mismatch: a cheap, safe retry - re-runs run_intake_stage
     # with the same real idea_dict, no external call involved.

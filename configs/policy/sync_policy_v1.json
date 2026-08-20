@@ -1,0 +1,7 @@
+{
+  "metric": "sync_duration_alignment",
+  "tolerance_seconds": 2.0,
+  "reference": "S20 audio artifact duration",
+  "calibration_notes": "Formalizes the SYNC_DURATION_TOLERANCE_SECONDS constant that has lived hardcoded in providers/stub/stub_sync.py since M3 Day 1 - same value (2.0s), now a frozen, versioned policy file instead of a code constant, per M3 Day 4 Part 1/3.",
+  "frozen_at": "2026-08-21"
+}
