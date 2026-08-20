@@ -522,20 +522,72 @@ STAGE_VALIDATORS["S20"] = _validate_voice_stage
 
 # --- Owner D (S30/S40) validator wrappers ---
 #
-# See providers/real/did_avatar.py's module-level note: identity-similarity
-# scoring is NOT implemented (blocked on identity_threshold_v1.json, which
-# doesn't exist yet). These validators check video validity and duration
-# alignment only - they cannot yet distinguish "right video, wrong face"
-# from "correct render". Both failure_types below (avatar_render_invalid,
-# sync_duration_mismatch) are placeholders for that broader gap.
+# M3 Day 4: identity_threshold_v1.json and sync_policy_v1.json now exist -
+# see providers/real/did_avatar.py's compute_identity_similarity() for the
+# identity check and configs/policy/sync_policy_v1.json for the frozen
+# duration-alignment tolerance. Mirrors Arslan's S20 pattern (Day 4,
+# voice_threshold_v1.json): one ValidationReportV1 per stage, deterministic
+# checks first, metric check second, only run when a reference is actually
+# available.
 
-from providers.real.did_avatar import validate_avatar_render
+from providers.real.did_avatar import compute_identity_similarity, validate_avatar_render
 from providers.stub.stub_sync import validate_sync
+
+_IDENTITY_THRESHOLD_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "identity_threshold_v1.json"
+_SYNC_POLICY_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "sync_policy_v1.json"
+
+
+def _load_identity_threshold() -> float:
+    """Load the frozen min_score from identity_threshold_v1.json.
+    Falls back to 0.85 if the file is missing (should never happen in production).
+    """
+    try:
+        data = json.loads(_IDENTITY_THRESHOLD_PATH.read_text())
+        return float(data["min_score"])
+    except Exception:
+        return 0.85
+
+
+def _load_sync_tolerance() -> float:
+    """Load the frozen tolerance_seconds from sync_policy_v1.json.
+    Falls back to 2.0 if the file is missing (matches the old hardcoded
+    SYNC_DURATION_TOLERANCE_SECONDS default, should never happen in production).
+    """
+    try:
+        data = json.loads(_SYNC_POLICY_PATH.read_text())
+        return float(data["tolerance_seconds"])
+    except Exception:
+        return 2.0
+
+
+def _find_identity_reference_ref(envelope: StageEnvelopeV1) -> ArtifactRefV1 | None:
+    """The identity reference image is threaded into every downstream
+    envelope's artifact_refs from pipeline.py's fetch_identity_reference
+    call (self._stage_outputs["_identity_ref"]) - same lookup did_avatar.py's
+    own run() already does to find it."""
+    return next(
+        (
+            ref for ref in envelope.artifact_refs
+            if ref.mime_type in {"image/png", "image/jpeg"}
+            or "identity_ref" in ref.artifact_id
+        ),
+        None,
+    )
 
 
 def _validate_avatar_render_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
 ) -> ValidationReportV1:
+    """S30 exit validator: file-validity/duration checks (via
+    validate_avatar_render), then identity-similarity check against the
+    registry's reference image (via compute_identity_similarity +
+    identity_threshold_v1.json).
+
+    failure_type priority: avatar_render_invalid if the video is
+    structurally bad, identity_similarity_low if it passes video checks
+    but doesn't match the registered identity - same priority ordering
+    Arslan's S20 validator uses (voice_invalid before speaker_similarity_low).
+    """
     if not output.artifact_refs:
         return ValidationReportV1(
             passed=False,
@@ -546,15 +598,43 @@ def _validate_avatar_render_stage(
     video_bytes = get_artifact(output.artifact_refs[0])
     audio_duration = _get_upstream_audio_duration(envelope)
 
+    # --- Step 1: structural video validation (stream presence / duration) ---
     passed, failures = validate_avatar_render(
         video_bytes,
         expected_audio_duration=audio_duration if audio_duration > 0 else None,
     )
+    if not passed:
+        return ValidationReportV1(
+            passed=False,
+            failures=failures,
+            stage_id=stage_id,
+            failure_type="avatar_render_invalid",
+        )
+
+    # --- Step 2: identity-similarity check against the registry reference ---
+    identity_ref = _find_identity_reference_ref(envelope)
+    min_score = _load_identity_threshold()
+
+    if identity_ref is not None:
+        reference_bytes = get_artifact(identity_ref)
+        similarity_score = compute_identity_similarity(reference_bytes, video_bytes)
+        if similarity_score < min_score:
+            return ValidationReportV1(
+                passed=False,
+                failures=[
+                    f"identity_similarity {similarity_score:.3f} is below the "
+                    f"threshold {min_score} from identity_threshold_v1.json — "
+                    f"re-render against the registered identity reference"
+                ],
+                stage_id=stage_id,
+                failure_type="identity_similarity_low",
+            )
+
     return ValidationReportV1(
-        passed=passed,
-        failures=failures,
+        passed=True,
+        failures=[],
         stage_id=stage_id,
-        failure_type=None if passed else "avatar_render_invalid",
+        failure_type=None,
     )
 
 
@@ -574,6 +654,7 @@ def _validate_sync_stage(
     passed, failures = validate_sync(
         video_bytes,
         expected_audio_duration=audio_duration if audio_duration > 0 else None,
+        tolerance=_load_sync_tolerance(),
     )
     return ValidationReportV1(
         passed=passed,

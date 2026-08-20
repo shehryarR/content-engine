@@ -1,0 +1,9 @@
+{
+  "metric": "identity_similarity",
+  "min_score": 0.85,
+  "reference": "identity_profiles.reference_asset (the identity's registered reference image)",
+  "calibrated_against": "synthetic accepted/negative image pairs (see calibration_notes)",
+  "calibration_notes": "No real accepted/negative identity photo pairs were available at calibration time, so this was calibrated against synthetic same-identity (slightly perturbed frame/lighting of the same reference) and different-identity (distinct synthetic reference) image pairs: same-identity pairs scored ~0.994, different-identity pairs scored ~0.65-0.78. 0.85 is a midpoint guard with margin on both sides. Recalibrate against real accepted_v1/negative_v1 identity photo pairs once available - same open item Arslan's voice_threshold_v1.json flagged for its own fixture set.",
+  "implementation": "mean-centered cosine similarity (Pearson correlation) on a 32x32 RGB pixel grid, comparing the identity reference image against a representative extracted frame from the generated avatar video; no model download required",
+  "frozen_at": "2026-08-21"
+}

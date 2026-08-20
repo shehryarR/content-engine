@@ -54,6 +54,10 @@ RETRYABLE_VALIDATION_FAILURE_TYPES = {
     # ValidationReportV1 points back at the registry's canonical voice_id.
     "speaker_similarity_low",
     "avatar_render_invalid",
+     # S30 identity_similarity_low: same reasoning as speaker_similarity_low
+    # above - re-rendering against the same registered identity image via
+    # D-ID is non-deterministic, so a fresh attempt can clear the threshold
+    "identity_similarity_low",
     "sync_duration_mismatch",
     # S00 intake_mismatch: a cheap, safe retry - re-runs run_intake_stage
     # with the same real idea_dict, no external call involved.
