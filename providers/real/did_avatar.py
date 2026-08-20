@@ -1,4 +1,4 @@
-from __future__ import annotations
+from _future_ import annotations
 
 import json
 import time
@@ -17,6 +17,21 @@ from providers.base import StageProvider
 import base64
 
 
+def _raise_with_body(response: requests.Response) -> None:
+    """Raise with the response body attached, so a D-ID failure shows the
+    actual error detail (e.g. quota exceeded, bad source_url, malformed
+    audio) instead of just a status code. Bodies are usually JSON, but
+    fall back to raw text if D-ID ever returns something else."""
+    if response.status_code >= 400:
+        try:
+            detail = response.json()
+        except ValueError:
+            detail = response.text
+        raise requests.exceptions.HTTPError(
+            f"{response.status_code} error from {response.url}: {detail}",
+            response=response,
+        )
+
 
 class DIDAvatarProvider(StageProvider):
     """
@@ -33,7 +48,7 @@ class DIDAvatarProvider(StageProvider):
 
     capability: str = "avatar_render"
 
-    def __init__(self):
+    def _init_(self):
         config = load_provider_config("avatar_render")
 
         api_key = config.get("api_key")
@@ -77,7 +92,7 @@ class DIDAvatarProvider(StageProvider):
             timeout=180,
         )
 
-        response.raise_for_status()
+        _raise_with_body(response)
 
         data = response.json()
         image_url = data.get("url")
@@ -116,10 +131,7 @@ class DIDAvatarProvider(StageProvider):
             timeout=180,
         )
 
-        if not response.ok:
-            raise RuntimeError(
-                f"D-ID API error {response.status_code}: {response.text}"
-            )
+        _raise_with_body(response)
 
         data = response.json()
         audio_url = data.get("url")
@@ -156,10 +168,7 @@ class DIDAvatarProvider(StageProvider):
             },
             timeout=180,
         )
-        if not response.ok:
-            raise RuntimeError(
-                f"D-ID API error {response.status_code}: {response.text}"
-            )
+        _raise_with_body(response)
 
         data = response.json()
         talk_id = data.get("id")
@@ -182,10 +191,7 @@ class DIDAvatarProvider(StageProvider):
                 headers=self._headers,
                 timeout=180,
             )
-        if not response.ok:
-            raise RuntimeError(
-                f"D-ID API error {response.status_code}: {response.text}"
-            )
+            _raise_with_body(response)
 
             data = response.json()
             status = data.get("status")
@@ -293,10 +299,7 @@ class DIDAvatarProvider(StageProvider):
             result_url,
             timeout=120,
         )
-        if not response.ok:
-            raise RuntimeError(
-                f"D-ID API error {response.status_code}: {response.text}"
-            )
+        _raise_with_body(response)
 
         video_data = response.content
 
@@ -330,13 +333,16 @@ class DIDAvatarProvider(StageProvider):
 # --- S30 exit validator logic. Wrapped as a StageValidator and registered
 # in orchestrator/stage_executor.py (STAGE_VALIDATORS["S30"]). ---
 #
-# M3 Day 4: identity_threshold_v1.json now exists and
-# compute_identity_similarity() below implements the real check. This
-# validator (validate_avatar_render) still only covers file-validity and
-# duration alignment - the identity-similarity check is wired separately
-# in stage_executor.py's _validate_avatar_render_stage, which calls
-# compute_identity_similarity() directly using the identity reference
-# image already present in envelope.artifact_refs.
+# IMPORTANT SCOPE NOTE (M3 Day 1 Part 1 / Part 2 decision): identity-
+# similarity scoring is NOT implemented here. identity_threshold_v1.json
+# doesn't exist yet (flagged since M2, still unresolved), and building a
+# real face-embedding-similarity check is a separate, heavier task than
+# this validator. Per the M3 Day 1 doc's explicit allowance, this ships
+# as a placeholder pass-through for identity: it validates that the
+# output is a genuinely valid, non-corrupt video of plausible duration,
+# but it CANNOT yet detect "right video, wrong face" - only "broken
+# video" or "video of the wrong length". Revisit once threshold
+# calibration lands.
 
 import os
 import subprocess
@@ -372,10 +378,7 @@ def validate_avatar_render(
     video stream), and its duration falls within tolerance of S20's
     audio duration when that's known. Returns (passed, failures).
 
-    Does NOT check identity similarity - see compute_identity_similarity()
-    below, which is a separate function so the caller (stage_executor.py)
-    can run it only when an identity reference is actually available and
-    report it as its own failure_type rather than folding it in here.
+    Does NOT check identity similarity - see module-level note above.
     """
     failures: list[str] = []
 
@@ -411,88 +414,3 @@ def validate_avatar_render(
             )
 
     return len(failures) == 0, failures
-
-
-def _extract_representative_frame_png(video_bytes: bytes) -> bytes | None:
-    """Grab one representative frame (~1s in) from the rendered video as
-    PNG bytes, via ffmpeg. Returns None if the video can't be decoded."""
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-        f.write(video_bytes)
-        video_path = f.name
-    frame_path = video_path + "_frame.png"
-    try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-i", video_path,
-                "-ss", "00:00:01", "-frames:v", "1", frame_path,
-            ],
-            capture_output=True, timeout=15,
-        )
-        if not os.path.exists(frame_path) or os.path.getsize(frame_path) == 0:
-            return None
-        with open(frame_path, "rb") as fh:
-            return fh.read()
-    except Exception:
-        return None
-    finally:
-        os.unlink(video_path)
-        if os.path.exists(frame_path):
-            os.unlink(frame_path)
-
-
-def compute_identity_similarity(reference_bytes: bytes, video_bytes: bytes) -> float:
-    """Compute an identity-consistency score in [0.0, 1.0] between the
-    registry's reference identity image and the generated avatar video.
-
-    Implementation: extracts one representative frame from the video via
-    ffmpeg, downsizes both the reference image and that frame to a 32x32
-    RGB grid, then computes cosine similarity on the mean-centered pixel
-    vectors (equivalent to Pearson correlation). Mirrors
-    compute_speaker_similarity()'s philosophy in elevenlabs_voice.py: no
-    model download, deterministic for the same input bytes, CI-safe.
-
-    Mean-centering matters here specifically - plain cosine similarity on
-    raw pixel intensities scored >0.99 for every pairing tested during
-    calibration (same-identity AND different-identity alike), because a
-    shared background dominates the vector. Centering each vector on its
-    own mean before comparing removes that bias; see
-    identity_threshold_v1.json's calibration_notes for the actual numbers
-    this was tuned against.
-
-    The 0.85 threshold in identity_threshold_v1.json was calibrated
-    against synthetic same-identity pairs (score ~0.994) and different-
-    identity pairs (score ~0.65-0.78).
-
-    Returns 0.0 if the video can't be decoded or either image fails to
-    load (treated as a mismatch, not an internal error, so the validator
-    reports identity_similarity_low rather than crashing).
-    """
-    import io
-    import numpy as np
-    from PIL import Image
-
-    frame_bytes = _extract_representative_frame_png(video_bytes)
-    if frame_bytes is None:
-        return 0.0
-
-    def _to_rgb_grid(image_bytes: bytes, size: int = 32) -> "np.ndarray":
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((size, size))
-        return np.asarray(img, dtype=np.float64).flatten()
-
-    try:
-        ref_vec = _to_rgb_grid(reference_bytes)
-        frame_vec = _to_rgb_grid(frame_bytes)
-    except Exception:
-        return 0.0
-
-    ref_centered = ref_vec - ref_vec.mean()
-    frame_centered = frame_vec - frame_vec.mean()
-
-    dot = float(np.dot(ref_centered, frame_centered))
-    norm = float(np.linalg.norm(ref_centered) * np.linalg.norm(frame_centered))
-    if norm == 0.0:
-        return 0.0
-    # Clamp to [0, 1] - negative correlation is a valid mismatch signal but
-    # collapsing it to 0.0 keeps this on the same [0,1] scale every other
-    # metric validator this sprint reports on.
-    return min(1.0, max(0.0, dot / norm))
