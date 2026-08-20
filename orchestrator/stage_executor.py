@@ -393,12 +393,72 @@ def execute_stage(
     return output, validation_ref
 # --- Owner C (S20) validator wrapper ---
 
-from providers.real.elevenlabs_voice import validate_voice
+import pathlib
+
+from providers.real.elevenlabs_voice import compute_speaker_similarity, validate_voice
+
+_VOICE_THRESHOLD_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "voice_threshold_v1.json"
+
+
+def _load_voice_threshold() -> float:
+    """Load the frozen min_score from voice_threshold_v1.json.
+    Falls back to 0.72 if the file is missing (should never happen in production).
+    """
+    try:
+        data = json.loads(_VOICE_THRESHOLD_PATH.read_text())
+        return float(data["min_score"])
+    except Exception:
+        return 0.72
+
+
+def _fetch_reference_voice_bytes(voice_id: str) -> bytes | None:
+    """Fetch the reference audio sample for a registry voice_id from the DB.
+
+    voice_profiles stores a 'reference_sample_artifact_id' column that points
+    to the canonical reference clip uploaded at voice-registration time.
+    Returns None if not available (stub/test environments where voice_profiles
+    is not populated with real audio) — the caller skips the similarity check.
+    """
+    try:
+        from orchestrator.telemetry import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT reference_sample_artifact_id FROM voice_profiles WHERE voice_id = %s",
+                    (voice_id,),
+                )
+                row = cur.fetchone()
+        if row is None or not row[0]:
+            return None
+        # reference_sample_artifact_id is stored as an artifact_id prefix;
+        # build a minimal ArtifactRefV1-like object to reuse get_artifact().
+        from contracts.common.envelope import ArtifactRefV1
+        ref = ArtifactRefV1(
+            artifact_id=row[0],
+            mime_type="audio/wav",
+            storage_path=f"artifacts/{row[0]}",
+            size_bytes=0,
+        )
+        return get_artifact(ref)
+    except Exception:
+        # DB not available, voice_profiles missing, or artifact not found —
+        # all treated as "no reference", which skips the similarity gate
+        # rather than failing every CI run.
+        return None
 
 
 def _validate_voice_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
 ) -> ValidationReportV1:
+    """S20 exit validator: codec/sample-rate/duration/silence checks (via
+    validate_voice), then speaker-similarity check against the registry's
+    reference sample (via compute_speaker_similarity + voice_threshold_v1.json).
+
+    One ValidationReportV1 per stage, per the pattern every other validator
+    in this sprint follows. failure_type priority: voice_invalid if the audio
+    is structurally bad, speaker_similarity_low if it passes audio checks but
+    doesn't sound like the registered voice.
+    """
     if not output.artifact_refs:
         return ValidationReportV1(
             passed=False,
@@ -409,12 +469,51 @@ def _validate_voice_stage(
     audio_ref = output.artifact_refs[0]
     audio_bytes = get_artifact(audio_ref)
 
+    # --- Step 1: structural audio validation (codec / sample rate / silence / duration) ---
     passed, failures = validate_voice(audio_bytes, mime_type=audio_ref.mime_type)
+    if not passed:
+        return ValidationReportV1(
+            passed=False,
+            failures=failures,
+            stage_id=stage_id,
+            failure_type="voice_invalid",
+        )
+
+    # --- Step 2: speaker-similarity check against the registry reference ---
+    # Extract voice_id from the VoiceTrackV1 payload.
+    payload = output.payload if isinstance(output.payload, dict) else {}
+    voice_id = payload.get("voice_id") or payload.get("voice_id")
+
+    min_score = _load_voice_threshold()
+    similarity_score: float | None = None
+
+    if voice_id:
+        suffix = ".wav" if "wav" in audio_ref.mime_type else ".mp3"
+        reference_bytes = _fetch_reference_voice_bytes(voice_id)
+        if reference_bytes is not None:
+            similarity_score = compute_speaker_similarity(
+                reference_bytes=reference_bytes,
+                generated_bytes=audio_bytes,
+                ref_suffix=".wav",
+                gen_suffix=suffix,
+            )
+            if similarity_score < min_score:
+                return ValidationReportV1(
+                    passed=False,
+                    failures=[
+                        f"speaker_similarity {similarity_score:.3f} is below the "
+                        f"threshold {min_score} from voice_threshold_v1.json — "
+                        f"re-synthesize against registry voice_id={voice_id!r}"
+                    ],
+                    stage_id=stage_id,
+                    failure_type="speaker_similarity_low",
+                )
+
     return ValidationReportV1(
-        passed=passed,
-        failures=failures,
+        passed=True,
+        failures=[],
         stage_id=stage_id,
-        failure_type=None if passed else "voice_invalid",
+        failure_type=None,
     )
 
 

@@ -28,7 +28,7 @@ from orchestrator import registry
 from orchestrator.activities import record_g80_approval, run_intake_stage, run_stage
 from orchestrator.manifest_store import get_connection, load_manifest
 from orchestrator.pipeline import AvatarPipeline, TASK_QUEUE
-from orchestrator.storage import BUCKET, put_artifact, _make_s3_client
+from orchestrator.storage import BUCKET, _make_s3_client, put_artifact
 from temporalio import activity
 from temporalio.exceptions import FailureError
 from temporalio.testing import WorkflowEnvironment
@@ -60,6 +60,7 @@ def _make_valid_wav_bytes() -> bytes:
     if not proc.stdout:
         raise RuntimeError(f"ffmpeg WAV generation failed: {proc.stderr[:300]}")
     return proc.stdout
+
 
 def _fetch_artifact_hash(artifact_id: str) -> str:
     """Fetch the raw bytes for an artifact from S3 by listing for the key
@@ -330,6 +331,9 @@ async def _run():
             assert next(s for s in s10 if s.attempt == 2).status == StageStatus.PASSED
 
 
+# ---------------------------------------------------------------------------
+# Test 2: S10 retry budget exhaustion
+# ---------------------------------------------------------------------------
 
 def test_s10_retry_budget_exhaustion():
     asyncio.run(_run_budget_exhaustion())
