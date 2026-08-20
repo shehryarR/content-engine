@@ -48,16 +48,7 @@ RETRYABLE_VALIDATION_FAILURE_TYPES = {
     # new, so NOT included.
     "malformed_script",
     "voice_invalid",
-    # S20 speaker_similarity_low: re-synthesis against the same registry
-    # voice_id is non-deterministic; a fresh ElevenLabs call can produce a
-    # closer speaker match without changing any inputs. Suggested fix in the
-    # ValidationReportV1 points back at the registry's canonical voice_id.
-    "speaker_similarity_low",
     "avatar_render_invalid",
-     # S30 identity_similarity_low: same reasoning as speaker_similarity_low
-    # above - re-rendering against the same registered identity image via
-    # D-ID is non-deterministic, so a fresh attempt can clear the threshold
-    "identity_similarity_low",
     "sync_duration_mismatch",
     # S00 intake_mismatch: a cheap, safe retry - re-runs run_intake_stage
     # with the same real idea_dict, no external call involved.
@@ -164,6 +155,18 @@ async def _run_stage_with_correction(
                     args=[identity_id],
                     start_to_close_timeout=STAGE_TIMEOUT,
                 )
+                # Re-validate consent on the fresh reference before resubmitting
+                # to D-ID. validate_run only ran once, pre-flight - consent can
+                # be revoked mid-run, and a retry must not silently resubmit a
+                # reference whose consent grant no longer holds. Raises (via
+                # ApplicationError) and is intentionally left uncaught here:
+                # a revoked-consent failure is a hard stop, not something this
+                # retry loop should absorb.
+                await workflow.execute_activity(
+                    "revalidate_identity_consent",
+                    args=[identity_id],
+                    start_to_close_timeout=STAGE_TIMEOUT,
+                )
                 current_artifact_refs = [
                     ref for ref in current_artifact_refs
                     if not str(ref.get("artifact_id", "")).startswith("identity_ref_")
@@ -233,7 +236,7 @@ class AvatarPipeline:
     signal wait that pauses the workflow until a human sends a signal.
     """
 
-    def __init__(self):
+    def _init_(self):
         self._approval: dict | None = None
         self._stage_outputs: dict[str, dict] = {}
         self._current_master_hash: str | None = None
