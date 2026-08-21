@@ -175,6 +175,9 @@ def _verify(run_id: str, privacy: str, workflow_result: dict | None = None):
 
 
     checkpoint_count = passed
+    passed_stage_ids = {s.stage_id for s in manifest.stages if s.status.value == "passed"}
+    total_stages = len(set(s.stage_id for s in manifest.stages))
+    checkpoint_count = len(passed_stage_ids)
 
     # ── Real content checks (Part 2) ────────────────────────────────────────
     synthetic_flag = False
