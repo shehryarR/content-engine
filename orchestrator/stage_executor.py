@@ -414,30 +414,32 @@ def _load_voice_threshold() -> float:
 def _fetch_reference_voice_bytes(voice_id: str) -> bytes | None:
     """Fetch the reference audio sample for a registry voice_id from the DB.
 
-    voice_profiles stores a 'reference_sample_artifact_id' column that points
-    to the canonical reference clip uploaded at voice-registration time.
-    Returns None if not available (stub/test environments where voice_profiles
-    is not populated with real audio) — the caller skips the similarity check.
+    voice_profiles stores reference_asset (storage path) and
+    reference_sample_hash directly - same shape as identity_profiles'
+    reference_asset/reference_sample_hash pair used for the S30 identity
+    check, populated by scripts/seed_voice_reference.py. Returns None if
+    not available (voice registered with no reference sample yet, or DB
+    unreachable) - the caller skips the similarity check rather than
+    failing every run that hasn't seeded one.
     """
     try:
         from orchestrator.telemetry import get_connection
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT reference_sample_artifact_id FROM voice_profiles WHERE voice_id = %s",
+                    "SELECT reference_asset, reference_sample_hash FROM voice_profiles WHERE voice_id = %s",
                     (voice_id,),
                 )
                 row = cur.fetchone()
-        if row is None or not row[0]:
+        if row is None or not row[0] or not row[1]:
             return None
-        # reference_sample_artifact_id is stored as an artifact_id prefix;
-        # build a minimal ArtifactRefV1-like object to reuse get_artifact().
+        reference_path, reference_hash = row[0], row[1]
         from contracts.common.envelope import ArtifactRefV1
         ref = ArtifactRefV1(
-            artifact_id=row[0],
+            artifact_id=f"voice_ref_{voice_id}",
+            path=reference_path,
+            hash=reference_hash,
             mime_type="audio/wav",
-            storage_path=f"artifacts/{row[0]}",
-            size_bytes=0,
         )
         return get_artifact(ref)
     except Exception:
