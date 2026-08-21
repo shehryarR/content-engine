@@ -414,17 +414,30 @@ def validate_avatar_render(
 
 
 def _extract_representative_frame_png(video_bytes: bytes) -> bytes | None:
-    """Grab one representative frame (~1s in) from the rendered video as
-    PNG bytes, via ffmpeg. Returns None if the video can't be decoded."""
+    """Grab one representative frame from the rendered video as PNG bytes,
+    via ffmpeg. Seeks to the midpoint of the video's actual duration
+    (via _probe_video_streams) rather than a fixed 1s offset, since a
+    fixed offset seeks past the end on videos shorter than 1s. Returns
+    None if the video can't be decoded."""
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
         f.write(video_bytes)
         video_path = f.name
     frame_path = video_path + "_frame.png"
     try:
+        streams = _probe_video_streams(video_bytes)
+        duration = 0.0
+        for s in streams:
+            if s.get("codec_type") == "video" and s.get("duration"):
+                try:
+                    duration = float(s["duration"])
+                    break
+                except (TypeError, ValueError):
+                    continue
+        seek_seconds = duration * 0.5 if duration > 0 else 0.0
         subprocess.run(
             [
                 "ffmpeg", "-y", "-i", video_path,
-                "-ss", "00:00:01", "-frames:v", "1", frame_path,
+                "-ss", f"{seek_seconds:.3f}", "-frames:v", "1", frame_path,
             ],
             capture_output=True, timeout=15,
         )
