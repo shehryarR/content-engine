@@ -67,3 +67,32 @@ for v in voices.voices:
 ```
 
 Pick any `category: premade` entry from that output and update your own `voice_profiles.provider_voice_id` accordingly — Voice Library voices you haven't explicitly added will 402 on free tier regardless of which ID you try.
+
+---
+
+## S20 Speaker Similarity Threshold & Recalibration Guide
+
+We use a spectral cosine similarity validator in stage S20 to ensure the generated audio sounds like the registered voice reference.
+
+### 1. Current Calibration Configuration
+The threshold is frozen in `configs/policy/voice_threshold_v1.json` at **0.72**. 
+- **Accepted reference/generation pairs** (same voice) score **≥ 0.80**.
+- **Negative reference/generation pairs** (different voice) score **≤ 0.55**.
+- **Why No Mean-Centering:** Cosine similarity runs directly on the raw, non-negative power spectra to match the frequency envelope shape. Mean-centering would change the math (turning it into a correlation metric) and invalidate the calibrated threshold.
+
+### 2. Recalibration Steps (When upgrading ElevenLabs models)
+If we upgrade or change the underlying voice generation model, the spectral characteristics of the generated audio may shift, requiring recalibration:
+
+1. **Prepare test samples:**
+   - Put a reference voice sample and a generated sample from the *same* voice in the accepted test set.
+   - Put the same reference voice sample and a generated sample from a *different* voice in the negative test set.
+2. **Calculate scores:**
+   - Run the similarity metric offline:
+     ```python
+     from providers.real.elevenlabs_voice import compute_speaker_similarity
+     # Load bytes for reference, accepted, and negative clips
+     print("Same speaker score:", compute_speaker_similarity(ref_bytes, acc_bytes))
+     print("Diff speaker score:", compute_speaker_similarity(ref_bytes, neg_bytes))
+     ```
+3. **Update Policy:**
+   - Set the new threshold `min_score` in `configs/policy/voice_threshold_v1.json` as the midpoint between the minimum accepted score and the maximum negative score.
