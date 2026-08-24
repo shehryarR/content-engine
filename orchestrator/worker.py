@@ -11,7 +11,7 @@ import asyncio
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from orchestrator.activities import run_stage, record_g80_approval,run_intake_stage
+from orchestrator.activities import run_stage, record_g80_approval,run_intake_stage,fetch_identity_reference
 from orchestrator.pipeline import AvatarPipeline, TASK_QUEUE
 from orchestrator.registry import register_all_stubs, try_register_real_providers
 
@@ -36,7 +36,7 @@ async def main():
         client,
         task_queue=TASK_QUEUE,
         workflows=[AvatarPipeline],
-        activities=[run_stage, record_g80_approval,run_intake_stage],
+        activities=[run_stage, record_g80_approval,run_intake_stage,fetch_identity_reference],
     )
     
     print(f"Starting worker on task queue: {TASK_QUEUE}")

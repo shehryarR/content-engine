@@ -62,20 +62,23 @@ def main():
 
     print("Creating D-ID talk...")
     response = requests.post(
-        f"{DID_API_URL}/talks",
-        headers={
-            **headers,
-            "Content-Type": "application/json",
-        },
-        json={
-            "source_url": image_url,
-            "script": {
-                "type": "audio",
-                "audio_url": audio_url,
+            f"{DID_API_URL}/talks",
+            headers={
+                **headers,
+                "Content-Type": "application/json",
             },
-        },
-    )
-
+            json={
+                "source_url": image_url,
+                "script": {
+                    "type": "audio",
+                    "audio_url": audio_url,
+                },
+                "config": {
+                    "stitch": True,
+                },
+            },
+            timeout=180,
+        )
     response.raise_for_status()
     talk_data = response.json()
     talk_id = talk_data["id"]
