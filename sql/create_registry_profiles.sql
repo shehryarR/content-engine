@@ -18,6 +18,3 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
     consent_status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS reference_asset TEXT;
-ALTER TABLE voice_profiles ADD COLUMN IF NOT EXISTS reference_sample_hash TEXT;
