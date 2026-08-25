@@ -49,12 +49,45 @@ class OpenAIWhisperCaptionsProvider:
         finally:
             os.unlink(tmp_path)
 
+        raw_words = list(getattr(transcript, 'words', []))
+
+        MIN_WORD_DURATION_SECONDS = 0.05  # matches S50's OVERLAP_TOLERANCE_SECONDS
+        SAFETY_MARGIN_SECONDS = 0.01
+        MIN_NONDEGENERATE_EPSILON = 0.001  # 1ms — the one thing this repair
+                                            # must never sacrifice, even when
+                                            # squeezed against a glitched
+                                            # next-word timestamp.
+
         words = []
-        for w in getattr(transcript, 'words', []):
+        for i, w in enumerate(raw_words):
+            start, end = w.start, w.end
+            if end is not None and start is not None and end <= start:
+                # whisper-1's forced alignment occasionally collapses a word's
+                # duration to a single frame (observed on longer/denser words
+                # like "accumulates", "investments") — end == start exactly.
+                # Retrying the API call is a coin flip on whether this
+                # recurs, since word-level timestamps aren't guaranteed
+                # deterministic call-to-call on identical audio. Repairing
+                # it here is more reliable than hoping a retry gets lucky.
+                repaired_end = start + MIN_WORD_DURATION_SECONDS
+                next_start = raw_words[i + 1].start if i + 1 < len(raw_words) else None
+                if next_start is not None:
+                    # Don't let the repair itself trigger the overlap check
+                    # against a closely-following next word — but if the next
+                    # word's own timestamp is glitched too (starts at or
+                    # before this word's start), clamping down to next_start
+                    # would collapse this word right back to end == start,
+                    # undoing the repair entirely. Guarantee a strictly
+                    # positive duration no matter how tight the neighbors
+                    # are; a sub-millisecond overlap is a non-issue compared
+                    # to leaving a degenerate timestamp in place.
+                    repaired_end = min(repaired_end, next_start - SAFETY_MARGIN_SECONDS)
+                repaired_end = max(repaired_end, start + MIN_NONDEGENERATE_EPSILON)
+                end = repaired_end
             words.append({
                 'text': w.word,
-                'start': w.start,
-                'end': w.end,
+                'start': start,
+                'end': end,
             })
 
         captions_data = {'words': words}

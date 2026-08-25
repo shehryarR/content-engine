@@ -182,10 +182,10 @@ class DIDAvatarProvider(StageProvider):
                 headers=self._headers,
                 timeout=180,
             )
-        if not response.ok:
-            raise RuntimeError(
-                f"D-ID API error {response.status_code}: {response.text}"
-            )
+            if not response.ok:
+                raise RuntimeError(
+                    f"D-ID API error {response.status_code}: {response.text}"
+                )
 
             data = response.json()
             status = data.get("status")

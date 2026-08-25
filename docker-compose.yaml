@@ -10,6 +10,7 @@ services:
       - "${DB_PORT}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./sql/00-create-temporal-databases.sql:/docker-entrypoint-initdb.d/00-temporal-databases.sql:ro
       - ./sql/create_manifest_stage_records.sql:/docker-entrypoint-initdb.d/02-manifest.sql:ro
       - ./sql/create_stage_run_records.sql:/docker-entrypoint-initdb.d/03-telemetry.sql:ro
       - ./sql/create_registry_profiles.sql:/docker-entrypoint-initdb.d/04-registry.sql:ro
@@ -22,6 +23,7 @@ services:
   temporal:
     container_name: temporal
     image: temporalio/auto-setup:1.26.2
+    restart: unless-stopped
     depends_on:
       postgresql:
         condition: service_healthy
