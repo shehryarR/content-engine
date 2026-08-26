@@ -13,7 +13,7 @@ from temporalio.worker import Worker
 
 from orchestrator.activities import run_stage, record_g80_approval,run_intake_stage,fetch_identity_reference
 from orchestrator.pipeline import AvatarPipeline, TASK_QUEUE
-from orchestrator.registry import register_all_stubs, try_register_real_providers
+from orchestrator.registry import register_from_run_config
 
 
 import logging
@@ -24,10 +24,29 @@ logging.basicConfig(
 
 TEMPORAL_HOST = "localhost:7233"
 
+def _providers_from_env() -> dict[str, str]:
+    """Standalone workers have no --config flag, so they read the same run
+    config via RUN_CONFIG. Without this, a faceless run started against a
+    standalone worker would silently resolve avatar providers and still
+    produce a green M4 diff -- a passed milestone proving nothing."""
+    import os
+    from pathlib import Path
+    import yaml
+
+    path = os.environ.get("RUN_CONFIG")
+    if not path:
+        return {}
+    cfg_path = Path(path)
+    if not cfg_path.exists():
+        raise SystemExit(f"[worker] RUN_CONFIG points at a missing file: {path}")
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    return cfg.get("providers") or {}
+
+
 async def main():
-    
-    register_all_stubs()
-    try_register_real_providers()
+
+    resolved = register_from_run_config(_providers_from_env())
+    print(f"[worker] provider resolution: {resolved}")
     
     client = await Client.connect("localhost:7233")
     
