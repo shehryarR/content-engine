@@ -1,0 +1,60 @@
+# configs/runs/faceless_poc.yaml
+#
+# M4 — faceless modularity proof.
+#
+# Day 1 skeleton (Owner A / Ammar). The two providers under `providers:`
+# DO NOT EXIST YET — faceless_mixed_media lands Day 2, narration_conform
+# lands Day 3. Naming them now is deliberate: it is the cheapest possible
+# test that the modality swap is expressible in config at all.
+#
+# Running this today should fail with a ProviderResolutionError from
+# orchestrator/registry.py listing the valid options for the capability.
+# That is the CORRECT Day 1 outcome. A run that silently falls back to
+# stub or D-ID providers would mean the config block is being ignored,
+# and that is a blocking finding, not a warning.
+#
+# Nothing in this file may require an edit to graph/ or contracts/.
+# `providers:` is read by cli.py and handed to registry.register_from_run_config().
+
+modality: faceless
+topic: How neural networks learn from data
+
+# No identity_id. Faceless has no identity; cli.py already sets
+# identity_id=None for non-avatar modality, and consent_gate.validate_run
+# must not demand one. Confirmed against contracts/stages/idea_request.py
+# (Modality.FACELESS is a frozen M0 enum value — no contract change needed
+# to express this run).
+voice_id: voice_002        # narration profile (Fatima, M4 Day 1 Part 2)
+style_id: style_001
+
+temporal_host: localhost:7233
+privacy: unlisted
+
+# ── Provider selection ────────────────────────────────────────────────────────
+# Capability names only, exactly as they appear in graph/pipeline_graph.py.
+# Vendor/implementation names live here and in registry._PROVIDER_CATALOG —
+# never in the graph.
+#
+# Capabilities omitted below keep their default resolution (stub, or the
+# keyed real provider where an API key is configured). Listing only what
+# faceless actually changes is itself part of the M4 proof: the diff of
+# this file against avatar_walking_skeleton.yaml IS the modality swap.
+providers:
+  avatar_render: faceless_mixed_media   # Day 2 — VisualRequestV1 -> PrimaryVisualTrackV1
+  media_sync: narration_conform         # Day 3 — VoiceTrackV1 + PrimaryVisualTrackV1 -> SynchronizedMediaV1
+  # voice_synthesis: intentionally absent.
+  #   The Kokoro-82M substitution is a registry row (voice_002), not a
+  #   provider swap. S20 runs the same ElevenLabs adapter as avatar.
+  #   If a provider name appears here later, that is a regression in the
+  #   modularity argument, not progress.
+
+# ── Modality-conditional validation ───────────────────────────────────────────
+# Populated Day 3, once Hanab's audit mechanism is chosen. Placeholder
+# recorded Day 1 so the shape is agreed before anyone is under pressure:
+# S30's identity check must be skipped for faceless (audit measured
+# -0.234 on unrelated stills against a 0.85 threshold — every faceless run
+# would burn its full retry budget on an unwinnable check), and G90 must
+# enforce contains_synthetic_media for non-avatar modality, which it
+# currently does not.
+#
+# policy_profile: configs/policy/modality_validation_policy_v1.json
