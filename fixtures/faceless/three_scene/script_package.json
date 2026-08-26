@@ -1,0 +1,8 @@
+{
+  "run_id": "run_faceless_001",
+  "scenes": [
+    "Neural networks are inspired by the human brain. They consist of layers of connected nodes called neurons that process information.",
+    "During training, the network sees thousands of examples and adjusts its internal weights to reduce prediction errors through a process called backpropagation.",
+    "Over many iterations, the network learns to recognise patterns in data and generalises that knowledge to make accurate predictions on new, unseen inputs."
+  ]
+}

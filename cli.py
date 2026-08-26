@@ -17,7 +17,7 @@ from datetime import datetime
 from contracts.stages.idea_request import IdeaRequestV1, Modality
 from orchestrator.manifest_store import load_manifest
 from orchestrator.pipeline import TASK_QUEUE, AvatarPipeline
-from orchestrator.registry import register_all_stubs, try_register_real_providers
+from orchestrator.registry import register_from_run_config
 from orchestrator.activities import run_stage, record_g80_approval, run_intake_stage,fetch_identity_reference
 from orchestrator.consent_gate import validate_run
 from orchestrator.manifest_store import get_connection
@@ -31,12 +31,19 @@ TEMPORAL_HOST = "localhost:7233"
 
 # ── Worker (runs in background thread) ────────────────────────────────────────
 
-def _run_worker():
-    """Start the Temporal worker in a daemon thread."""
+def _run_worker(providers: dict[str, str] | None = None):
+    """Start the Temporal worker in a daemon thread.
+
+    `providers` is the run config's `providers:` block. It is resolved
+    inside the worker thread because that is where the registry the
+    activities read actually lives -- resolving it in main() would
+    populate a different module-level dict than the one execute_stage
+    calls get() on.
+    """
 
     async def _worker_main():
-        register_all_stubs()
-        try_register_real_providers()
+        resolved = register_from_run_config(providers)
+        print(f"[worker] provider resolution: {resolved}")
         client = await Client.connect(TEMPORAL_HOST)
         worker = Worker(
             client,
@@ -281,7 +288,13 @@ def main():
     print(f"{'='*60}\n")
 
   
-    worker_thread = threading.Thread(target=_run_worker, daemon=True)
+    provider_overrides = config.get("providers") or {}
+    if provider_overrides:
+        print(f"  providers: {provider_overrides}")
+
+    worker_thread = threading.Thread(
+        target=_run_worker, args=(provider_overrides,), daemon=True
+    )
     worker_thread.start()
     time.sleep(2) 
 
