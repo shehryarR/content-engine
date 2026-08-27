@@ -537,6 +537,7 @@ from providers.stub.stub_sync import validate_sync
 
 _IDENTITY_THRESHOLD_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "identity_threshold_v1.json"
 _SYNC_POLICY_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "sync_policy_v1.json"
+_MODALITY_POLICY_PATH = pathlib.Path(__file__).parent.parent / "configs" / "policy" / "modality_validation_policy_v1.json"
 
 
 def _load_identity_threshold() -> float:
@@ -560,6 +561,24 @@ def _load_sync_tolerance() -> float:
         return float(data["tolerance_seconds"])
     except Exception:
         return 2.0
+
+
+def _load_modality_policy() -> dict:
+    """Load configs/policy/modality_validation_policy_v1.json.
+
+    Fails CLOSED (returns {}) on any read/parse error - unlike
+    _load_identity_threshold/_load_sync_tolerance's fallback-to-a-safe-
+    number pattern, an empty policy here means "no check is exempted for
+    any modality", i.e. the identity check still runs. A missing/corrupt
+    policy file becomes a loud faceless-run failure (identity_similarity_low)
+    rather than a silent pass - the exact failure mode the M4 audit's G90
+    finding (D3/D4) warned about. Do not change this fallback without
+    re-reading that discussion in evidence/m4/day1_modality_audit.md.
+    """
+    try:
+        return json.loads(_MODALITY_POLICY_PATH.read_text())
+    except Exception:
+        return {}
 
 
 def _find_identity_reference_ref(envelope: StageEnvelopeV1) -> ArtifactRefV1 | None:
@@ -617,7 +636,22 @@ def _validate_avatar_render_stage(
     identity_ref = _find_identity_reference_ref(envelope)
     min_score = _load_identity_threshold()
 
-    if identity_ref is not None:
+    # Modality signal: presence of an identity reference is the same
+    # signal did_avatar.py itself depends on, and pipeline.py only
+    # populates it when modality == "AVATAR" (see fetch_identity_reference
+    # block). This is the narrowest of the two signals the M4 Day 2 doc
+    # allows for S30 - no new envelope plumbing needed. G90's enforcement
+    # (Day 3) may need Ammar's richer modality-threading; S30 doesn't.
+    modality = "avatar" if identity_ref is not None else "faceless"
+    policy = _load_modality_policy()
+    identity_check_policy = policy.get("S30_identity_check", {"applicable_modalities": ["avatar"]})
+    applicable_modalities = identity_check_policy.get("applicable_modalities", ["avatar"])
+    identity_check_applies = modality in applicable_modalities
+
+    if not identity_check_applies:
+        skip_reason = identity_check_policy.get("skip_reason", "modality not applicable")
+        print(f"[S30 validator] identity check skipped for modality={modality!r}: {skip_reason}")
+    elif identity_ref is not None:
         reference_bytes = get_artifact(identity_ref)
         similarity_score = compute_identity_similarity(reference_bytes, video_bytes)
         if similarity_score < min_score:

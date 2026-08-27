@@ -83,12 +83,22 @@ not a contract change.
 ### S100 publish
 Read `_validate_publish_stage` in full.
 
-**Finding:** checks privacy value + re-reads the upstream G90 disclosure
-decision's `contains_synthetic_media`. The check itself is modality-
-neutral, but it inherits G90's gap indirectly — if G90 lets a False flag
-through for faceless, S100's re-check of that same flag also passes it.
+**Correction (M4 Day 2, D5):** the Day 1 finding below overstated this
+check. Re-confirmed against the code: `_validate_publish_stage` checks
+`contains_synthetic_media` **unconditionally on modality** — it does not
+gate on `modality == "AVATAR"` the way G90 does. It is a working backstop,
+not a gap-inheritor. An overstated defect is as much a problem as an
+understated one, so this is corrected here rather than left standing.
 
-**Verdict: fixed by fixing G90.** No separate S100 fix needed.
+**Original Day 1 finding (superseded):** checks privacy value + re-reads
+the upstream G90 disclosure decision's `contains_synthetic_media`. The
+check itself is modality-neutral, but it inherits G90's gap indirectly —
+if G90 lets a False flag through for faceless, S100's re-check of that
+same flag also passes it.
+
+**Verdict: S100 is independently correct.** G90's D3/D4 fix (Day 3) is
+still required — a faceless run with a false disclosure record must never
+reach S100 in the first place — but S100 itself was never the gap.
 
 ## Audit Table Summary
 
@@ -101,7 +111,7 @@ through for faceless, S100's re-check of that same flag also passes it.
 | S70 (deterministic) | Stream presence, duration, codec/resolution, sync_score proxy | **Modality-neutral** — confirmed, no identity/voice/face metric implemented | No change needed |
 | S70 (model judge) | Subjective vision-LLM quality check | Mostly neutral — flagging criteria are fine, only prompt wording assumes avatar | Reword prompt, Day 2/3, provider-private |
 | G90 | `contains_synthetic_media` enforcement | **Real gap** — only enforced for AVATAR modality; non-avatar currently passes regardless of flag value | Needs `policy_basis` decision + enforcement extension — raised to Ammar/Fatima today |
-| S100 | Privacy + re-reads G90 decision | Neutral itself, inherits G90's gap indirectly | Fixed by fixing G90 |
+| S100 | Privacy + `contains_synthetic_media` (unconditional on modality) | Neutral, independently correct — working backstop, not a gap-inheritor (corrected Day 2, D5) | No fix needed; G90's own D3/D4 fix still required upstream |
 
 ## Mechanism recommendation
 

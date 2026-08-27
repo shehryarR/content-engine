@@ -1,0 +1,6 @@
+{
+  "S30_identity_check": {
+    "applicable_modalities": ["avatar"],
+    "skip_reason": "faceless output has no identity — score was -0.234 on unrelated stills"
+  }
+}
