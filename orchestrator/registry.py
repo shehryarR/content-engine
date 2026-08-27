@@ -38,6 +38,7 @@ from providers.real.did_avatar import DIDAvatarProvider
 from providers.real.elevenlabs_voice import ElevenLabsVoiceProvider
 from orchestrator.provider_config import load_provider_config
 from providers.real.faceless_mixed_media import FacelessMixedMediaProvider
+from providers.real.narration_conform import NarrationConformProvider
 
 _providers: dict[str, StageProvider] = {}
 
@@ -67,6 +68,8 @@ _PROVIDER_CATALOG: dict[str, dict[str, type]] = {
     "avatar_render":      {"stub": StubAvatarProvider,
                            "did": DIDAvatarProvider,
                            "faceless_mixed_media": FacelessMixedMediaProvider},
+    "media_sync":         {"stub": StubSyncProvider,
+                           "narration_conform": NarrationConformProvider},
 }
 
 # Which provider a capability auto-selects when an API key is present and
