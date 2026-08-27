@@ -29,7 +29,7 @@ from orchestrator.provider_config import load_provider_config
 # per M3 Day 1's human-fallback rule, same as an explicit failed=True.
 MIN_CONFIDENCE = 0.6
 
-_JUDGE_SYSTEM_PROMPT = """You are reviewing a short AI-avatar video for \
+_JUDGE_SYSTEM_PROMPT = """You are reviewing a short AI-generated video for \
 presentation quality only - NOT for factual accuracy, script content, or \
 anything covered by deterministic checks elsewhere in the pipeline. You \
 are looking at 3 sampled frames from the video plus its caption text.
