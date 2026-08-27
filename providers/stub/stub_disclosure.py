@@ -6,10 +6,11 @@ G90 Disclosure Decision Stub Provider.
 Produces a deterministic DisclosureDecisionV1 payload wrapped inside a StageOutputV1.
 """
 
+import json
 from contracts.common.envelope import StageEnvelopeV1, StageOutputV1
 from contracts.stages.g90_disclosure import DisclosureDecisionV1
-from contracts.stages.idea_request import Modality
-from orchestrator.storage import put_artifact
+from contracts.stages.idea_request import IdeaRequestV1, Modality
+from orchestrator.storage import put_artifact, get_artifact
 
 
 class StubDisclosureProvider:
@@ -36,7 +37,18 @@ class StubDisclosureProvider:
                 "G90 disclosure stub requires a video artifact in envelope.artifact_refs"
             )
         master_video_hash = video_ref.hash
-        modality_val = Modality.AVATAR
+
+        # Extract the modality dynamically if the idea request is present in artifact refs
+        idea_ref = next(
+            (r for r in envelope.artifact_refs if "idea" in r.artifact_id),
+            None,
+        )
+        if idea_ref is not None:
+            idea_data = json.loads(get_artifact(idea_ref))
+            idea = IdeaRequestV1.model_validate(idea_data)
+            modality_val = idea.modality
+        else:
+            modality_val = Modality.AVATAR
 
         disclosure_decision = DisclosureDecisionV1(
             modality=modality_val,
