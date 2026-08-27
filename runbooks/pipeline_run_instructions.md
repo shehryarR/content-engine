@@ -229,6 +229,8 @@ Both should show real S3 paths and non-empty hashes.
 
 ## Step 10 — Run the pipeline
 
+### Option A — Avatar Invocation
+
 ```bash
 uv run avatar-harness run \
   --config configs/runs/avatar_walking_skeleton.yaml \
@@ -236,6 +238,21 @@ uv run avatar-harness run \
   --run-id run_<yourname>_01 \
   --privacy private
 ```
+
+### Option B — Faceless Invocation
+
+```bash
+uv run avatar-harness run \
+  --config configs/runs/faceless_poc.yaml \
+  --idea "Faceless narration: How neural networks learn from data" \
+  --run-id run_<yourname>_02 \
+  --privacy unlisted
+```
+
+### Faceless Prerequisites & Notes
+- **Voice Seeding**: Ensure the voice reference (specifically `voice_002` or whichever voice profile is used) has been seeded to the registry DB with a reference sample first (see Step 8).
+- **No Identity Needed**: Faceless runs do not require or use an `identity_id`.
+- **Standalone Workers**: If executing with standalone workers in separate terminal windows, ensure the `RUN_CONFIG` environment variable is set to configure the worker environment.
 
 **Always use a unique `--run-id` per invocation — never reuse one.**
 Reusing a `run-id` across separate runs silently overwrites manifest
