@@ -878,10 +878,25 @@ from contracts.stages.g90_disclosure import DisclosureDecisionV1
 def _validate_disclosure_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
 ) -> ValidationReportV1:
-    """G90 exit validator: containsSyntheticMedia must be present, and
-    True for avatar-modality runs. False is a validation failure per the
-    M0/M1 architecture rule - stated since the first milestone doc, never
-    enforced as a validator until now."""
+    """G90 exit validator: contains_synthetic_media must be present, and
+    True for every modality that uses synthetic content.
+
+    M4 Day 2 (Owner A / Ammar): the original check only enforced for
+    modality == "AVATAR". This was D4 in the discrepancy tracker — a
+    faceless run narrated by a synthetic voice sailed through G90 with
+    contains_synthetic_media=False. S100 caught it (its check is
+    unconditional), so publication was blocked, but the gate designed to
+    catch it stayed green. Fixed here to enforce-on-unknown: a modality
+    nobody has thought about yet is the case where failing closed is
+    correct. See evidence/m4/day1_ammar/g90_disclosure_finding.md §4
+    for the ordering trap that required this to land with D3's provider
+    fix in the same commit window.
+
+    Modalities that do NOT require synthetic disclosure can be added to
+    _MODALITIES_EXEMPT_FROM_SYNTHETIC_DISCLOSURE below. The list is
+    intentionally empty at ship: avatar uses a synthetic face, faceless
+    uses a synthetic voice, and any future modality should be assumed
+    synthetic until a deliberate policy decision says otherwise."""
     payload = output.payload if isinstance(output.payload, dict) else {}
 
     if "contains_synthetic_media" not in payload:
@@ -895,19 +910,21 @@ def _validate_disclosure_stage(
     modality = str(payload.get("modality", "")).upper()
     contains_synthetic = payload.get("contains_synthetic_media")
 
-    if modality == "AVATAR" and contains_synthetic is not True:
-        return ValidationReportV1(
-            passed=False,
-            failures=[
-                f"avatar-modality run must have contains_synthetic_media=True, "
-                f"got {contains_synthetic!r}"
-            ],
-            stage_id=stage_id,
-            failure_type="disclosure_synthetic_flag_false",
-        )
+    _MODALITIES_EXEMPT_FROM_SYNTHETIC_DISCLOSURE: set[str] = set()
+
+    if modality not in _MODALITIES_EXEMPT_FROM_SYNTHETIC_DISCLOSURE:
+        if contains_synthetic is not True:
+            return ValidationReportV1(
+                passed=False,
+                failures=[
+                    f"{modality or 'unknown'}-modality run must have "
+                    f"contains_synthetic_media=True, got {contains_synthetic!r}"
+                ],
+                stage_id=stage_id,
+                failure_type="disclosure_synthetic_flag_false",
+            )
 
     return ValidationReportV1(passed=True, failures=[], stage_id=stage_id, failure_type=None)
-
 
 def _validate_publish_stage(
     output: StageOutputV1, stage_id: str, envelope: StageEnvelopeV1
