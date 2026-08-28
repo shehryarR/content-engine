@@ -1,0 +1,3 @@
+ERROR:  column "provider" does not exist
+LINE 1: SELECT stage_id, provider, model, version, cost_status, late...
+                         ^
