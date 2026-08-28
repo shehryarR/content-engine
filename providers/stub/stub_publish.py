@@ -22,11 +22,31 @@ TARGET_PRIVACY = "unlisted"  # this pipeline never publishes as public
 
 
 class StubPublishProvider:
-    """Stub implementation for S100 publish capability."""
+    """Stub implementation for S100 publish capability.
+
+    M5 step 7: class-level invocation counter so the negative test suite
+    (tests/test_m5_gate_negative.py, Fatima) can assert publish was never
+    actually called for any of the 5 gate-blocking scenarios. Class-level
+    (not instance-level) so the count persists across a test's multiple
+    StubPublishProvider() instantiations - reset_count() must be called
+    in each test's setup, or counts leak across tests sharing this class.
+    """
 
     capability: str = "publish"
 
+    _invocation_count: int = 0
+
+    @classmethod
+    def reset_count(cls):
+        cls._invocation_count = 0
+
+    @classmethod
+    def get_count(cls) -> int:
+        return cls._invocation_count
+
     def run(self, envelope: StageEnvelopeV1, run_id: str) -> StageOutputV1:
+        StubPublishProvider._invocation_count += 1
+
         disclosure_ref = next(
             (ref for ref in envelope.artifact_refs if "disclosure" in ref.artifact_id.lower()),
             None,
