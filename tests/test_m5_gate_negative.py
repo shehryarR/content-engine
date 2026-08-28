@@ -7,7 +7,7 @@ unreachable without valid approval and disclosure.
   Tests 1-4  stop at G80 (no approval / bad decision / stale hash).
   Test 5     stops at G90 (_validate_disclosure_stage fails; .run() never called).
 
-All five tests assert StubPublishProvider.invocation_count == 0 after the
+All five tests assert StubPublishProvider.get_count() == 0 after the
 scenario completes — never mid-run.
 """
 import asyncio
@@ -47,22 +47,13 @@ def _make_envelope(stage_id: str, capability: str, artifact_refs=None) -> StageE
 
 
 def _reset_publish_count():
-    """Reset class-level invocation counter before each test."""
-    StubPublishProvider.invocation_count = 0
+    """Reset the real class-level invocation counter before each test.
 
-
-# Patch invocation_count onto the stub provider — it doesn't exist in production
-# code (intentionally), so we track it here at the class level for M5 gate tests.
-StubPublishProvider.invocation_count = 0
-_original_run = StubPublishProvider.run
-
-
-def _tracked_run(self, envelope, run_id):
-    StubPublishProvider.invocation_count += 1
-    return _original_run(self, envelope, run_id)
-
-
-StubPublishProvider.run = _tracked_run
+    Uses StubPublishProvider's actual reset_count()/get_count() (M5 step 7,
+    Hanab) rather than a test-local shadow counter — a wrapper here would
+    test the wrapper, not the real implementation.
+    """
+    StubPublishProvider.reset_count()
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +78,7 @@ def test_no_approval_publish_never_called():
     assert pipeline._approval is None, "No approval signal should have been received"
 
     # Because _approval is None, G90/S100 loop body is never entered
-    assert StubPublishProvider.invocation_count == 0
+    assert StubPublishProvider.get_count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +127,7 @@ def test_rejected_approval_raises_and_publish_not_called(mock_save, mock_put):
     # Confirm the failure detail has the right failure_type
     detail = exc_info.value.details[0]
     assert detail["failure_type"] == "approval_rejected"
-    assert StubPublishProvider.invocation_count == 0
+    assert StubPublishProvider.get_count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +173,7 @@ def test_changes_requested_raises_and_publish_not_called(mock_save, mock_put):
     assert exc_info.value.type == "ValidationFailure"
     detail = exc_info.value.details[0]
     assert detail["failure_type"] == "approval_rejected"
-    assert StubPublishProvider.invocation_count == 0
+    assert StubPublishProvider.get_count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +209,7 @@ def test_stale_hash_approval_is_ignored():
 
     # _approval must remain None — signal was ignored
     assert pipeline._approval is None, "Stale-hash approval must not set _approval"
-    assert StubPublishProvider.invocation_count == 0
+    assert StubPublishProvider.get_count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -250,4 +241,4 @@ def test_false_disclosure_fails_g90_publish_not_called():
     # Workflow stops here at G90; the assertion below is post-completion.
     assert report.passed is False, "G90 must reject contains_synthetic_media=False"
     assert report.failure_type == "disclosure_synthetic_flag_false"
-    assert StubPublishProvider.invocation_count == 0, "S100 must never be reached when G90 fails"
+    assert StubPublishProvider.get_count() == 0, "S100 must never be reached when G90 fails"
