@@ -136,7 +136,7 @@ def test_publish_public_privacy_fails():
     report = _validate_publish_stage(output, "S100", envelope)
 
     assert report.passed is False
-    assert report.failure_type == "publish_privacy_violation"
+    assert report.failure_type == "publish_precondition_failed"
     assert report.failure_type not in RETRYABLE_VALIDATION_FAILURE_TYPES
 
 

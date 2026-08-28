@@ -1,0 +1,14 @@
+ stage_id |   provider_name    | provider_model | provider_capability 
+----------+--------------------+----------------+---------------------
+ G90      | disclosure_check   | stub           | disclosure_check
+ S00      | intake             | stub           | intake
+ S10      | script_generation  | stub           | script_generation
+ S100     | publish            | stub           | publish
+ S20      | voice_synthesis    | stub           | voice_synthesis
+ S30      | avatar_render      | stub           | avatar_render
+ S40      | media_sync         | stub           | media_sync
+ S50      | caption_generation | stub           | caption_generation
+ S60      | assembly           | stub           | assembly
+ S70      | quality_control    | stub           | quality_control
+(10 rows)
+
