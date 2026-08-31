@@ -20,6 +20,8 @@ dependencies = [
     "google-genai>=2.17.0",
     "openai>=2.53.0",
     "python-dotenv>=1.2.2",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
 ]
 
 [dependency-groups]
