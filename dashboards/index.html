@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Avatar Harness — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #12161A;
+    --panel: #1B2127;
+    --panel-2: #232a31;
+    --border: #2c343c;
+    --accent: #F5A623;
+    --verified: #3ECF8E;
+    --error: #ff6b6b;
+    --text: #e8e8e8;
+    --text-dim: #8a9199;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 48px 20px 80px;
+  }
+  h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 28px;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .subtitle { color: var(--text-dim); font-size: 14px; margin-bottom: 32px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+
+  label {
+    display: block;
+    margin-top: 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  label:first-child { margin-top: 0; }
+
+  input, select {
+    width: 100%;
+    padding: 10px 12px;
+    margin-top: 6px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    transition: border-color 0.15s ease;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  button {
+    margin-top: 20px;
+    padding: 12px 24px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+  button:hover:not(:disabled) { opacity: 0.9; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #status-card { display: none; }
+  #status-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  #run-id { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-dim); }
+
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .badge-running { background: rgba(245,166,35,0.15); color: var(--accent); }
+  .badge-completed { background: rgba(62,207,142,0.15); color: var(--verified); }
+  .badge-failed { background: rgba(255,107,107,0.15); color: var(--error); }
+  .badge-waiting { background: rgba(138,145,153,0.15); color: var(--text-dim); }
+
+  .spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #progress-bar-bg {
+    height: 6px;
+    background: var(--panel-2);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  #progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--verified));
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--text-dim);
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  td:first-child { font-family: 'Inter', sans-serif; font-weight: 600; color: var(--accent); }
+  tr:last-child td { border-bottom: none; }
+
+  .error-box {
+    background: rgba(255,107,107,0.08);
+    border: 1px solid rgba(255,107,107,0.3);
+    color: var(--error);
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+
+  .hint { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1>Avatar Harness</h1>
+  <div class="subtitle">Submit a run, watch every stage complete in real time.</div>
+
+  <div class="card">
+    <label>Topic</label>
+    <input id="topic" placeholder="e.g. How neural networks learn from data">
+
+    <label>Modality</label>
+    <select id="modality">
+      <option value="avatar">avatar</option>
+      <option value="faceless">faceless</option>
+    </select>
+
+    <div id="identity-row">
+      <label>Identity</label>
+      <select id="identity_id"></select>
+      <div class="hint" id="identity-hint"></div>
+    </div>
+
+    <label>Voice</label>
+    <select id="voice_id"></select>
+    <div class="hint" id="voice-hint"></div>
+
+    <button id="submit-btn" onclick="submitRun()">Start Run</button>
+  </div>
+
+  <div class="card" id="status-card">
+    <div id="status-header">
+      <span id="run-id"></span>
+      <span id="status-badge" class="badge badge-waiting">—</span>
+    </div>
+    <div id="progress-bar-bg"><div id="progress-bar-fill"></div></div>
+    <div id="error-container"></div>
+    <table id="stage-table" style="display:none">
+      <thead>
+        <tr><th>Stage</th><th>Attempt</th><th>Provider</th><th>Model</th><th>Cost</th><th>Latency</th></tr>
+      </thead>
+      <tbody id="stage-body"></tbody>
+    </table>
+  </div>
+
+<script>
+let pollTimer = null;
+
+async function loadProfiles() {
+  const res = await fetch('/api/profiles');
+  const data = await res.json();
+  const idSel = document.getElementById('identity_id');
+  const voiceSel = document.getElementById('voice_id');
+
+  idSel.innerHTML = data.identities.length
+    ? data.identities.map(i => `<option value="${i.id}">${i.name}</option>`).join('')
+    : '<option value="">No identities seeded</option>';
+  document.getElementById('identity-hint').textContent = data.identities.length
+    ? '' : 'Run scripts/seed_identity_reference.py to add one.';
+
+  voiceSel.innerHTML = data.voices.length
+    ? data.voices.map(v => `<option value="${v.id}">${v.name}</option>`).join('')
+    : '<option value="">No voices seeded</option>';
+  document.getElementById('voice-hint').textContent = data.voices.length
+    ? '' : 'Run scripts/seed_voice_reference.py to add one.';
+}
+
+document.getElementById('modality').addEventListener('change', (e) => {
+  document.getElementById('identity-row').style.display = e.target.value === 'avatar' ? 'block' : 'none';
+});
+
+function setBadge(status) {
+  const badge = document.getElementById('status-badge');
+  badge.className = 'badge';
+  if (status === 'completed') { badge.classList.add('badge-completed'); badge.textContent = 'Completed'; }
+  else if (status === 'failed') { badge.classList.add('badge-failed'); badge.textContent = 'Failed'; }
+  else if (status && status.startsWith('running') || status === 'starting') {
+    badge.classList.add('badge-running');
+    badge.innerHTML = `<span class="spinner"></span>${status.replace(/_/g, ' ')}`;
+  } else {
+    badge.classList.add('badge-waiting');
+    badge.textContent = (status || 'waiting').replace(/_/g, ' ');
+  }
+}
+
+async function submitRun() {
+  const btn = document.getElementById('submit-btn');
+  const topic = document.getElementById('topic').value.trim();
+  if (!topic) { alert('Enter a topic first.'); return; }
+
+  btn.disabled = true;
+  const modality = document.getElementById('modality').value;
+  const body = {
+    topic: topic,
+    modality: modality,
+    voice_id: document.getElementById('voice_id').value,
+    identity_id: modality === 'avatar' ? document.getElementById('identity_id').value : null,
+  };
+
+  const res = await fetch('/api/runs', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+
+  document.getElementById('status-card').style.display = 'block';
+
+  if (!res.ok) {
+    const err = await res.json();
+    document.getElementById('error-container').innerHTML = `<div class="error-box">${err.detail}</div>`;
+    setBadge('failed');
+    btn.disabled = false;
+    return;
+  }
+
+  const data = await res.json();
+  document.getElementById('run-id').textContent = data.run_id;
+  document.getElementById('error-container').innerHTML = '';
+  setBadge('starting');
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => pollStatus(data.run_id), 2000);
+  pollStatus(data.run_id);
+}
+
+const STAGE_TOTAL = 11; // S00-S70, G80, G90, S100 - rough denominator for the progress bar
+
+async function pollStatus(runId) {
+  const res = await fetch(`/api/runs/${runId}`);
+  if (!res.ok) return;
+  const data = await res.json();
+
+  setBadge(data.high_level_status);
+
+  if (data.error) {
+    document.getElementById('error-container').innerHTML = `<div class="error-box">${data.error}</div>`;
+  }
+
+  const passed = data.manifest ? data.manifest.passed : data.stages.length;
+  const pct = Math.min(100, Math.round((passed / STAGE_TOTAL) * 100));
+  document.getElementById('progress-bar-fill').style.width = pct + '%';
+
+  const tbody = document.getElementById('stage-body');
+  tbody.innerHTML = data.stages.map(s => `
+    <tr>
+      <td>${s.stage_id}</td>
+      <td>${s.attempt}</td>
+      <td>${s.provider}</td>
+      <td>${s.model}</td>
+      <td>${s.cost ?? '—'}</td>
+      <td>${s.latency_ms ?? '—'}</td>
+    </tr>
+  `).join('');
+  document.getElementById('stage-table').style.display = data.stages.length ? 'table' : 'none';
+
+  if (data.high_level_status === 'completed' || data.high_level_status === 'failed') {
+    clearInterval(pollTimer);
+    document.getElementById('submit-btn').disabled = false;
+  }
+}
+
+loadProfiles();
+</script>
+</body>
+</html>
